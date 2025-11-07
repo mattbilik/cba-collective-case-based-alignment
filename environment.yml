@@ -1,0 +1,8 @@
+name: ccai
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.11
+  - python-dotenv
+prefix: /Users/mattbilik/opt/anaconda3/envs/ccai
