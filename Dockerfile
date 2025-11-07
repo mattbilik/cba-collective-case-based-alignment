@@ -6,7 +6,7 @@
     ENV PYTHONUNBUFFERED 1
 
     # Set the working directory inside the container
-    WORKDIR /app
+    # WORKDIR /app
 
     # Copy the environment.yml file
     COPY environment.yml .
