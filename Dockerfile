@@ -15,7 +15,7 @@
     RUN conda env create -f environment.yml
 
     # Activate the Conda environment for subsequent commands
-    SHELL ["conda", "run", "-n", "your_env_name", "/bin/bash", "-c"]
+    SHELL ["conda", "run", "-n", "ccai", "/bin/bash", "-c"]
 
     # Copy your application code
     COPY . .
