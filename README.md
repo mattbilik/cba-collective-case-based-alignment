@@ -2,6 +2,7 @@
 # Collective Case-Based Alignment
 
 ## Updates
+![CCAI Architecture](ccai.png)
 
 This repo was updated to support training for constitutional alignment.
 
