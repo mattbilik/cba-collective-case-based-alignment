@@ -29,7 +29,7 @@ tokenized = dataset.map(tokenize, batched=True)
 
 # Train
 args = TrainingArguments(
-    output_dir="./finetuned-constitution-llama",
+    output_dir="./finetuned-constitution-qwen-0.5b",
     per_device_train_batch_size=2,
     gradient_accumulation_steps=8,
     learning_rate=2e-4,
