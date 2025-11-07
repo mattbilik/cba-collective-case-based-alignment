@@ -1,3 +1,7 @@
 outputs/
 __pycache__
 data/
+.env
+.vscode/
+.DS_Store
+~/.cache

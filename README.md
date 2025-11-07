@@ -1,5 +1,12 @@
 # A Critical Evaluation of AI Feedback for Aligning Language Models
 
+## Updates
+
+This repo was updated to support training for constitutional alignment.
+
+New functions:
+`revise_responses_on_constitution_openai`
+
 ## What is this repo?
 
 This repo is the official implementation for aligning language models with AI feedback and instruction-tuning, described in the paper [A Critical Evaluation of AI Feedback for Aligning Language Models](https://arxiv.org/abs/2402.12366). This codebase builds on the official [DPO](https://github.com/eric-mitchell/direct-preference-optimization) implementation.

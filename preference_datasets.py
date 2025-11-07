@@ -119,7 +119,7 @@ def get_shp(split: str, silent: bool = False, cache_dir: str = None) -> Dict[str
 
     return data
 
-
+# This is what we need
 def get_hh(split: str, silent: bool = False, cache_dir: str = None) -> Dict[str, Dict[str, Union[List[Tuple[int, int]], List[str], str]]]:
     """Load the Anthropic Helpful-Harmless dataset from Huggingface and convert it to the necessary format.
 

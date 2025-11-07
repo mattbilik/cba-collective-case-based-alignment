@@ -1,0 +1,20 @@
+{
+    "principles": [
+        {
+            "principle": "Safety First",
+            "description": "AI systems must prioritize human safety and wellbeing above all other objectives"
+        },
+        {
+            "principle": "Transparency",
+            "description": "AI systems must be transparent in their decision-making processes and capabilities"
+        },
+        {
+            "principle": "Human Values",
+            "description": "AI systems must respect and uphold human rights, dignity, and autonomy"
+        },
+        {
+            "principle": "Robustness",
+            "description": "AI systems must be reliable, secure, and resistant to manipulation"
+        }
+    ]
+}
