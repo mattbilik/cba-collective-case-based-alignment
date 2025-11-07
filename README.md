@@ -1,4 +1,5 @@
-# A Critical Evaluation of AI Feedback for Aligning Language Models
+
+# Collective Case-Based Alignment
 
 ## Updates
 
@@ -6,6 +7,8 @@ This repo was updated to support training for constitutional alignment.
 
 New functions:
 `revise_responses_on_constitution_openai`
+
+# A Critical Evaluation of AI Feedback for Aligning Language Models
 
 ## What is this repo?
 
