@@ -14,13 +14,12 @@ from preference_datasets import get_batch_iterator
 1. Use SFT'd model to generate pairs for RLAIF.
     - Also ask model to generate a score for each response 
         (i.e. a proportion that captures alignment to constitutional principles)
-2. Use pairs and scores (proportions) to train reward model.
+2. Use pairs and scores (proportions) to train reward model (gpt 2, although we can change this).
 3. PPO SFT'd model with RLAIF model as reward model.
 """
 
 BASE_MODEL = "Qwen/Qwen2-0.5B"
 ADAPTER_MODEL = "finetuned-constitution-qwen-0.5b/checkpoint-6"
-
 
 class PPOTrainer:
     def __init__(self, reward_model, dataset: Dataset, model):
@@ -96,7 +95,7 @@ class SFTModel:
 
     def fine_tune_with_ppo_and_save(self, reward_model):
         """
-        Fine-tune the SFT model using PPO with the provided reward model
+        Fine-tune the SFT'd model again (fine-tuned for the first time in train_peft) using PPO with the provided reward model
         and save it!
         """
 
@@ -112,7 +111,7 @@ class RewardModel:
             self.constitution = json.load(f)
 
         self.dataset = None 
-        self.num_samples = kwargs.num_samples if 'num_samples' in kwargs else 1000  # Number of prompts to process
+        self.num_samples = kwargs.num_samples if 'num_samples' in kwargs else 2  # Number of prompts to process
         
         self.tokenizer = AutoTokenizer.from_pretrained('huggyllama/llama-7b')
         self.tokenizer.pad_token_id = self.tokenizer.eos_token_id
@@ -187,26 +186,38 @@ class RewardModel:
             log_prob = 0.5
             
         # TODO: want to ask Vinay what he's doing here
+        # https://huggingface.co/docs/trl/main/en/reward_trainer
+        
         if log_prob > 0.5:
             chosen_response = response_1
             rejected_response = response_2
         else:
             chosen_response = response_2
             rejected_response = response_1
-            log_prob = 1 - log_prob
+            
+            # I think this is not how we handle this
+            # log_prob = 1 - log_prob
             
         log_prob = math.log(log_prob + 1e-10)  # Avoid log(0)
 
         return log_prob, chosen_response, rejected_response
 
     def __generate_dataset(self, log_probs) -> Dataset:
+        
+        """
+        Generating a dataset
+        """
+        
         rows = []
 
         # {"prompt": [{"role": "user", "content": "What color is the sky?"}],
         # "chosen": [{"role": "assistant", "content": "It is blue."}],
         # "rejected": [{"role": "assistant", "content": "It is green."}]}
         
-        for prompt, log_prob, chosen_response, rejected_response in log_probs.items():
+        for prompt, log_prob in log_probs.items():
+            
+            print(log_prob)
+            log_prob, chosen_response, rejected_response = log_probs[prompt]
             
             prompt = [{"role": "user", "content": prompt}]
             chosen_response = [{"role": "assistant", "content": chosen_response}]
@@ -222,15 +233,17 @@ class RewardModel:
 
     def __generate_completions_and_scores(self):
         """
-        Iterate over prompts, generate response pairs, score them, and store log probs
-        Args:
-            prompts (list): List of prompts to generate completions for
+        Generate response pairs and scores for RLAIF training
+        1. For each prompt, generate two responses using the SFT model.
+        2. Randomly select a constitutional principle.
+        3. Compute log probabilities that one response is better aligned than the other.
+        4. Store the results in a dataset for reward model training.
         """
                 
         log_probs = {}
         prompt_idx = 0
 
-        for batch in self.prompt_iterator:
+        for batch in tqdm(self.prompt_iterator):
             
             prompt_idx += 1
             
@@ -281,6 +294,13 @@ class RewardModel:
 
 
 def main():
+
+    if torch.backends.mps.is_available():
+        mps_device = torch.device("mps")
+        x = torch.ones(1, device=mps_device)
+        print(f"Using MPS device: {x.device}")
+    else:
+        print("MPS device not available.")
 
     reward_model = RewardModel()
     reward_model.train_reward_model()

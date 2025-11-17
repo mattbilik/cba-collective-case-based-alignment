@@ -48,6 +48,7 @@ def get_openai_completion(prompt,
     c = _openai_chat_completion(
         model=model,
         messages=[
+            # TODO: We want to be handle multiple turns in the future, so lets append them here
             {'role': 'system', 'content': system_prompt},
             {'role': 'user', 'content': prompt}
         ],

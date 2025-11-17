@@ -25,5 +25,5 @@
 
 
     # Train model
-    CMD ["python", "train_peft.py"]
+    CMD ["python", "hf_rlaif.py"]
 
