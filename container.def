@@ -1,0 +1,15 @@
+Bootstrap: docker
+From: continuumio/miniconda3:latest  # Use a Miniconda base image
+
+%files
+    ./environment.yml /tmp/environment.yml
+    ./requirements.txt /tmp/requirements.txt
+
+%post
+    conda env create -f /tmp/environment.yml
+    pip install -r /tmp/requirements.txt
+
+%environment
+    # Ensure the new conda environment is in the PATH at runtime
+    source /opt/conda/etc/profile.d/conda.sh
+    conda activate ccai

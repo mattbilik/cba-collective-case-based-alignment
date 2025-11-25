@@ -2,11 +2,17 @@ from transformers import AutoTokenizer, AutoModelForCausalLM, TrainingArguments,
 from peft import LoraConfig, get_peft_model
 from datasets import Dataset
 import json
+import os
+
+# Disable wandb logging
+os.environ["WANDB_DISABLED"] = "true"
 
 # Slightly bigger model
 # https://huggingface.co/Qwen/Qwen2-0.5B
 # Using a 0.5 billion parameter model for demonstration, then PEFT with LoRA
-model_name = "Qwen/Qwen2-0.5B"
+# model_name = "Qwen/Qwen2-0.5B"
+model_name = "Qwen/Qwen2-1.5B"
+
 tokenizer = AutoTokenizer.from_pretrained(model_name)
 model = AutoModelForCausalLM.from_pretrained(model_name)
 
@@ -44,7 +50,8 @@ tokenized_dataset = dataset.map(tokenize, batched=True, remove_columns=dataset.c
 
 # Train
 args = TrainingArguments(
-    output_dir="./finetuned-constitution-qwen-0.5b",
+    # output_dir="./finetuned-constitution-qwen-0.5b",
+    output_dir="./finetuned-constitution-qwen-1.5b",
     per_device_train_batch_size=2,
     gradient_accumulation_steps=8,
     learning_rate=2e-4,

@@ -5,3 +5,6 @@ data/
 .vscode/
 .DS_Store
 ~/.cache
+/wandb
+ppo_model_constitution
+reward-model-constitution-gpt2

@@ -1,0 +1,53 @@
+Bootstrap: docker
+From: nvidia/cuda:12.2.2-base-ubuntu22.04
+
+%files
+    environment.yml /reqs/environment.yml
+    requirements.txt /reqs/requirements.txt
+
+%post
+    set -e
+
+    echo "===== [SYSTEM] Installing system dependencies ====="
+    apt-get update && apt-get install -y \
+        build-essential wget bzip2 git ca-certificates && \
+        apt-get clean && rm -rf /var/lib/apt/lists/*
+
+    apt-get -y install vim
+
+    echo "===== [MINICONDA] Installing Miniconda3 ====="
+    wget -q https://repo.anaconda.com/miniconda/Miniconda3-py311_24.11.1-0-Linux-x86_64.sh -O /tmp/miniconda.sh
+    bash /tmp/miniconda.sh -b -p /opt/conda
+    rm /tmp/miniconda.sh
+    export PATH="/opt/conda/bin:$PATH"
+
+    echo "===== [CONDA] Sourcing conda.sh and updating base ====="
+    . /opt/conda/etc/profile.d/conda.sh
+    conda update -n base -c defaults conda -y
+
+    echo "===== [CONDA] Creating environment from environment.yml ====="
+    conda env create -f /reqs/environment.yml
+
+    echo "===== [PIP] Installing additional requirements ====="
+    /opt/conda/envs/ccai/bin/pip install -r /reqs/requirements.txt
+
+    echo "===== [CLEANUP] Cleaning caches ====="
+    conda clean -afy
+    rm -rf /opt/conda/pkgs/*/*/tests
+    rm -rf /opt/conda/pkgs/*/*/doc
+
+    echo "===== [POST] Finished building container ====="
+    conda info --envs
+
+%environment
+    echo "===== [RUNTIME] Activating ccai environment ====="
+    export CONDA_DEFAULT_ENV=ccai
+    export PYTHONUNBUFFERED=1
+    . /opt/conda/etc/profile.d/conda.sh
+    conda activate ccai
+    export PATH="/opt/conda/envs/ccai/bin:$PATH"
+
+%runscript
+    . /opt/conda/etc/profile.d/conda.sh
+    conda activate ccai
+    exec python "$@"

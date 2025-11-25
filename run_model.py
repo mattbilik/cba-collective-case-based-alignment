@@ -2,7 +2,7 @@ from peft import PeftModel
 from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline
 
 base_model_name = "Qwen/Qwen2-0.5B"
-adapter_model_name = "finetuned-constitution-qwen-0.5b/checkpoint-6"
+adapter_model_name = "ppo_model_constitution"
 
 model = AutoModelForCausalLM.from_pretrained(base_model_name)
 model = PeftModel.from_pretrained(model, adapter_model_name)
