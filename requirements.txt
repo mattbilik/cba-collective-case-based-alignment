@@ -12,6 +12,7 @@ appnope==0.1.4
 asttokens==3.0.0
 attrs==25.4.0
 beautifulsoup4==4.12.2
+bitsandbytes==0.40.2
 certifi==2025.10.5
 charset-normalizer==3.4.4
 click==8.3.0
@@ -73,7 +74,6 @@ pydantic==2.12.4
 pydantic_core==2.41.5
 Pygments==2.19.2
 python-dateutil==2.9.0.post0
-python-dotenv @ file:///home/conda/feedstock_root/build_artifacts/bld/rattler-build_python-dotenv_1761503229/work
 pytz==2025.2
 PyYAML==6.0.3
 pyzmq==27.1.0
