@@ -26,15 +26,19 @@ os.environ["WANDB_DISABLED"] = "true"
 
 
 class SFTModel:
-    def __init__(self, model_name=BASE_MODEL, adapter_name=ADAPTER_MODEL, device="cpu"):
-        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
-        model = AutoModelForCausalLM.from_pretrained(model_name).to(device)
-        self.peft_model = PeftModel.from_pretrained(model, adapter_name)
-
+    # def __init__(self, model_name=BASE_MODEL, adapter_name=ADAPTER_MODEL, device="cpu"):
+    def __init__(self, model_name=BASE_MODEL, device_map="auto"):
+        
+        # Actually do not want to use the adapter, want to use our new finetuned model from train_peft.py
+        
         self.model_name = model_name
 
-        # print("TESTING LOADING OF MODEL WITH VALUE HEAD:", test)
-        # test = AutoModelForCausalLMWithValueHead.from_pretrained(self.model).to(self.device)
+        self.model = AutoModelForCausalLM.from_pretrained(
+            model_name,
+            device_map=device_map
+        )
+        
+        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
 
         # TODO: what is actually the right dataset to fine-tune with PPO here?
         self.dataset = None
@@ -51,7 +55,7 @@ class SFTModel:
         inputs = self.tokenizer(system_prompt + prompt, return_tensors="pt")
 
         # Setting do_sample to be true so we get more diverse outputs
-        outputs = self.peft_model.generate(
+        outputs = self.model.generate(
             **inputs, max_new_tokens=max_new_tokens, temperature=temperature, do_sample=True)
         response = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
         return response
@@ -68,9 +72,11 @@ class SFTModel:
 
 class PPOTrainerRLAIF:
     # def __init__(self, reward_model, dataset: Dataset, model_name, device="cpu", model_to_PPO, adapter_model=ADAPTER_MODEL):
-    def __init__(self, reward_model, model_to_PPO: SFTModel, adapter_model=ADAPTER_MODEL):
+    # def __init__(self, reward_model, model_to_PPO: SFTModel, adapter_model=ADAPTER_MODEL):
+    def __init__(self, reward_model_name, model_to_PPO: SFTModel, bf16=False):
+
         """
-        reward_model: a pipeline that takes in a list of strings and outputs a list of dicts with 'score' key
+        reward_model_name: reward model name/path
         dataset: Dataset object with prompts to train on
         model_name: name of the base model to fine-tune with PPO
         device: device to run on
@@ -79,10 +85,10 @@ class PPOTrainerRLAIF:
 
         dataset = model_to_PPO.dataset
         model_name = model_to_PPO.model_name
-        device = model_to_PPO.device
+        device_map = model_to_PPO.device_map
 
-        self.reward_model = reward_model
-        self.device = device
+        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+        self.tokenizer.pad_token = self.tokenizer.eos_token
 
         print("\nTraining SFT'd model with PPO and our reward model:\n")
 
@@ -92,26 +98,23 @@ class PPOTrainerRLAIF:
         # The automodel with value head is required for PPO training (gives us a value function to compute advantages)
         # Maybe we actually don't want the value head here? It returns an error
 
-        sft_model = AutoModelForCausalLM.from_pretrained(model_name).to(device)
-        test_sft_on_top_of_base = PeftModel.from_pretrained(
-            sft_model, adapter_model).to(device)
+        sft_model = AutoModelForCausalLM.from_pretrained(
+            model_name,
+            device_map=device_map 
+        )
 
+        # Copy of the policy model we're fine-tuning
         reference_model = AutoModelForCausalLM.from_pretrained(
-            model_name).to(device)
-        test_ref_on_top_of_base = PeftModel.from_pretrained(
-            reference_model, adapter_model).to(device)
+            model_name,
+            device_map=device_map 
+        )
 
-        value_model = AutoModelForCausalLM.from_pretrained(
-            model_name).to(device)
-        test_val_on_top_of_base = PeftModel.from_pretrained(
-            value_model, adapter_model).to(device)
-
-        # Reward model is trained with PEFT, but no need to invoke here
-        actual_reward_model = AutoModelForCausalLM.from_pretrained(
-            reward_model).to(device)
-
-        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
-        self.tokenizer.pad_token = self.tokenizer.eos_token
+        # ! Reward model is trained with PEFT, so need to load base and then PEFT on top
+        base_reward_model = AutoModelForCausalLM.from_pretrained(
+            reward_model_name,
+            device_map=device_map 
+        )
+        reward_model = PeftModel.from_pretrained(base_reward_model, reward_model_name)
 
         # Turn off bf16 for mac compatability
         # PPO is being moved to the experimental library
@@ -119,8 +122,8 @@ class PPOTrainerRLAIF:
         try:
             config = PPOConfig(
                 # TODO: Why are we specifying the reward model twice?
-                reward_model_path=reward_model,
-                bf16=False,  # turn off bf16 for Mac Intel compatability
+                reward_model_path=reward_model_name,
+                bf16=bf16,  # turn off bf16 for Mac Intel compatability
             )
             print("Successfully created PPO config")
         except Exception as e:
@@ -129,14 +132,13 @@ class PPOTrainerRLAIF:
         try:
             self.ppo_trainer = PPOTrainer(
                 # The model attribute is used to specify the policy model
-                model=test_sft_on_top_of_base,
+                model=sft_model,
                 args=config,
 
                 # We also need to specify the reward model, the reference model (copy of the policy model),
                 # and the value model (used to predict value of next state)
-                reward_model=actual_reward_model,
-                ref_model=test_ref_on_top_of_base,
-                value_model=test_val_on_top_of_base,
+                reward_model=reward_model,
+                ref_model=reference_model,
                 train_dataset=dataset,
                 processing_class=None,
             )
@@ -184,15 +186,14 @@ class PPOTrainerRLAIF:
 
 
 class RewardDataset:
-    def __init__(self, constitution_path='constitution.json', device="cpu", num_samples=2):
+    def __init__(self, constitution_path='constitution.json', num_samples=2):
 
         self.SFT_model = SFTModel()
         with open(constitution_path, 'r') as f:
             self.constitution = json.load(f)
-        self.device = device
         self.num_samples = num_samples  # Number of prompts to process
 
-        self.tokenizer = AutoTokenizer.from_pretrained('huggyllama/llama-7b')
+        self.tokenizer = AutoTokenizer.from_pretrained(BASE_MODEL)
         self.tokenizer.pad_token_id = self.tokenizer.eos_token_id
 
         self.prompt_iterator = get_batch_iterator(['hh'], tokenizer=self.tokenizer, split='train', batch_size=1, sft_mode=True,
@@ -351,13 +352,21 @@ class RewardDataset:
 
 
 class RewardModel:
-    def __init__(self, reward_data: RewardDataset):
+    def __init__(self, reward_data: RewardDataset, model_name=BASE_MODEL, device_map="auto", bf16=False):
 
         # TODO: Probably do something with device here
         self.dataset = reward_data.get_dataset()
         self.output_dir = "./reward-model-constitution-Qwen/Qwen3-0.6B"
+        self.bf16 = bf16
 
     def train_reward_model(self):
+        
+        reward_model = AutoModelForSequenceClassification.from_pretrained(
+            model_name,
+            device_map="auto",
+        )
+        
+        tokenizer = AutoTokenizer.from_pretrained(model_name)
 
         training_args = RewardConfig(
             output_dir=self.output_dir,
@@ -365,7 +374,7 @@ class RewardModel:
             per_device_train_batch_size=2,
             learning_rate=2e-5,
             logging_steps=10,
-            bf16=False,  # turn off bf16
+            bf16=self.bf16,  # turn off bf16
             # TODO: turn on fp16 when training on Hyak
             # fp16=True,
         )
@@ -380,7 +389,7 @@ class RewardModel:
 
         # Using Qwen 0.6B here, but can change later
         trainer = RewardTrainer(
-            model="Qwen/Qwen3-0.6B",
+            model=reward_model,
             args=training_args,
             train_dataset=self.dataset,
             peft_config=peft_config,
@@ -394,135 +403,31 @@ class RewardModel:
     def get_sft_model_with_reward_data(self):
         return self.SFT_model
 
-def test_ppo_trainer(reward_model, dataset: Dataset, model_name, adapter_name, device="cpu"):
-
-    """
-    test_ppo_trainer(
-        reward_model="reward-model-constitution-gpt2/checkpoint-3",
-        dataset=Dataset.from_dict({
-            "prompt": ["Test prompt 1", "Test prompt 2"],
-            "chosen": ["Chosen response 1", "Chosen response 2"],
-            "rejected": ["Rejected response 1", "Rejected response 2"],
-            "margin": [0.5, 0.7]
-        }),
-        model_name=BASE_MODEL,
-        adapter_name=ADAPTER_MODEL,
-        device=device
-    )
-    """
-
-    print("Loading SFT'd model for PPO training...")
-
-    # https://newfacade.github.io/notes-on-reinforcement-learning/17-ppo-trl.html
-    # https://huggingface.co/docs/trl/main/en/ppo_trainer#trl.PPOConfig
-
-    # The automodel with value head is required for PPO training (gives us a value function to compute advantages)
-    # Maybe we actually don't want the value head here? It returns an error
-
-    sft_model = AutoModelForCausalLM.from_pretrained(model_name).to(device)
-    test_sft_on_top_of_base = PeftModel.from_pretrained(
-        sft_model, adapter_name).to(device)
-
-    reference_model = AutoModelForCausalLM.from_pretrained(
-        model_name).to(device)
-    test_ref_on_top_of_base = PeftModel.from_pretrained(
-        reference_model, adapter_name).to(device)
-
-    value_model = AutoModelForCausalLM.from_pretrained(model_name).to(device)
-    test_val_on_top_of_base = PeftModel.from_pretrained(
-        value_model, adapter_name).to(device)
-
-    # Reward model is trained with PEFT, but no need to invoke here
-    actual_reward_model = AutoModelForCausalLM.from_pretrained(
-        reward_model).to(device)
-
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
-    tokenizer.pad_token = tokenizer.eos_token
-
-    # Turn off bf16 for mac compatability
-    # PPO is being moved to the experimental library
-
-    try:
-        config = PPOConfig(
-            # TODO: Why are we specifying the reward model twice?
-            reward_model_path=reward_model,
-            bf16=False,  # turn off bf16 for Mac Intel compatability
-        )
-        print("Successfully created PPO config")
-    except Exception as e:
-        print("Error creating PPOConfig, likely MacOS related:", e)
-
-    try:
-        ppo_trainer = PPOTrainer(
-            # The model attribute is used to specify the policy model
-            model=test_sft_on_top_of_base,
-            args=config,
-
-            # We also need to specify the reward model, the reference model (copy of the policy model),
-            # and the value model (used to predict value of next state)
-            reward_model=actual_reward_model,
-            ref_model=test_ref_on_top_of_base,
-            value_model=test_val_on_top_of_base,
-            train_dataset=dataset,
-            processing_class=None,
-        )
-    except Exception as e:
-        print("Error initializing PPOTrainer:", e)
-
-    def train_ppo(generation_kwargs={
-        "min_length": -1,
-        "top_k": 0.0,
-        "top_p": 1.0,
-        "do_sample": True,
-        "pad_token_id": tokenizer.eos_token_id
-    }):
-
-        epochs = 10
-        for epoch in tqdm(range(epochs), "epoch: "):
-            for batch in tqdm(ppo_trainer.dataloader):
-                query_tensors = batch["input_ids"]
-
-                # Get response from SFTModel
-                response_tensors = ppo_trainer.generate(
-                    query_tensors, **generation_kwargs)
-                batch["response"] = [tokenizer.decode(
-                    r.squeeze()) for r in response_tensors]
-
-                # Compute reward score
-                texts = [q + r for q,
-                         r in zip(batch["query"], batch["response"])]
-                pipe_outputs = actual_reward_model(texts)
-                rewards = [torch.tensor(output[1]["score"])
-                           for output in pipe_outputs]
-
-                # Run PPO step
-                stats = ppo_trainer.step(
-                    query_tensors, response_tensors, rewards)
-                ppo_trainer.log_stats(stats, batch, rewards)
-
-    train_ppo()
-    ppo_trainer.save_model("ppo_model_constitution")
-
-
 def main():
 
-    device = "cpu"
-
-    if torch.cuda.is_available():
-        device = "cuda:0" if torch.cuda.is_available() else "cpu"
-        print(f"Using CUDA device: {device}")
+    device_map = "auto"
+    bf16 = False
+    
+    if compute_dtype == torch.float16 and use_4bit:
+    major, _ = torch.cuda.get_device_capability()
+    if major >= 8:
+        print("=" * 80)
+        print("Your GPU supports bfloat16: accelerate training with bf16=True")
+        print("=" * 80)
+        
+        bf16 = True
 
     dataset = RewardDataset(
-        constitution_path='constitution.json', device=device, num_samples=2)
+        constitution_path='constitution.json', num_samples=2)
 
-    reward_model = RewardModel(dataset)
+    reward_model = RewardModel(dataset, bf16=bf16)
     reward_model.train_reward_model()
 
     sft_model = SFTModel()
     sft_model.set_dataset(dataset.get_dataset())
 
     ppo_trainer = PPOTrainerRLAIF(
-        reward_model.get_reward_model() + "/checkpoint-3", sft_model)
+        reward_model.get_reward_model() + "/checkpoint-3", sft_model, bf16=bf16)
     
     # Train sft_model with PPO and save
     ppo_trainer.train_and_save_model()
