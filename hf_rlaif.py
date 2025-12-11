@@ -200,9 +200,9 @@ class PPOTrainerRLAIF:
 
 
 class RewardDataset:
-    def __init__(self, constitution_path='constitution.json', num_samples=2):
+    def __init__(self, sft_model: SFTModel, constitution_path='constitution.json', num_samples=2):
 
-        self.SFT_model = SFTModel()
+        self.SFT_model = sft_model
         
         with open(constitution_path, 'r') as f:
             self.constitution = json.load(f)
@@ -466,14 +466,15 @@ class RewardDataset:
 
 
 class RewardModel:
-    def __init__(self, reward_data: RewardDataset, model_name=BASE_MODEL, bf16=False):
+    def __init__(self, sft_model: SFTModel, reward_data: RewardDataset, bf16=False):
 
         # TODO: Probably do something with device here
         self.dataset = reward_data.get_dataset()
         self.checkpoint_dir = "./reward-model-constitution-Qwen-1.5b-checkpoints"
+        self.adapter_dir = "./reward-model-constitution-Qwen-1.5b-adapters"
         self.output_dir = "./final-reward-model-constitution-Qwen-1.5b"
         self.bf16 = bf16
-        self.model_name = model_name
+        self.model_name = sft_model.get_model_name()
 
     def train_reward_model(self):
 
@@ -520,8 +521,16 @@ class RewardModel:
         )
 
         trainer.train()
+        
+        trainer.model.save_pretrained(self.adapter_dir)
+        # trainer.tokenizer.save_pretrained(self.output_dir)
+        
+        base_model = AutoModelForSequenceClassification.from_pretrained(self.model_name)
+        lora_model = PeftModel.from_pretrained(base_model, self.adapter_dir)
 
-        trainer.model.save_pretrained(self.output_dir)
+        merged_model = lora_model.merge_and_unload()
+
+        merged_model.save_pretrained(self.output_dir)
         trainer.tokenizer.save_pretrained(self.output_dir)
 
     def get_reward_model_name(self):
@@ -593,13 +602,20 @@ class GRPOTrainerRLAIF:
         texts = [p + c for p, c in zip(prompts, completions)]
 
         print("\nComputing reward for:", texts)
+        
+        if self.reward_tokenizer.pad_token is None:
+            self.reward_tokenizer.pad_token = self.reward_tokenizer.eos_token
 
+        self.reward_tokenizer.pad_token_id = self.reward_tokenizer.eos_token_id
+        self.reward_model.config.pad_token_id = self.reward_tokenizer.pad_token_id
+        
         enc = self.reward_tokenizer(
             texts,
             padding=True,
             truncation=True,
             return_tensors="pt"
         ).to(self.reward_model.device)
+        
 
         T = enc["input_ids"].shape[1]
 
@@ -607,16 +623,34 @@ class GRPOTrainerRLAIF:
 
         with torch.no_grad():
             # What: get output logits from reward model for input and squeeze to get reward values
-
             outputs = self.reward_model(**enc)
-            print("Logits", len(outputs.logits))
 
-            # For sequence classification reward models, logits → reward
-            rewards = outputs.logits.squeeze(-1)
-            print("Score logits (not probabilities)", len(rewards))
+            # logits: [B, 1, 2] → [B, 2]
+            logits = outputs.logits.squeeze(1)
 
-        rewards = rewards.unsqueeze(1).expand(-1, T)  # [B, T]
-        rewards = rewards.detach().cpu().tolist()
+        # convert to scalar reward
+        # For sequence classification reward models, logits → reward
+        # scalar reward per sequence
+        rewards = logits[:, 1] - logits[:, 0]             # [B]
+
+        # expand across token dimension
+        # rewards = rewards.unsqueeze(1).expand(-1, T)            # [B, T]  
+        
+        rewards = rewards.detach().cpu().tolist()      
+        # with torch.no_grad():
+        
+        
+        #     # What: get output logits from reward model for input and squeeze to get reward values
+
+        #     outputs = self.reward_model(**enc)
+        #     print("Logits", len(outputs.logits))
+
+        #     # For sequence classification reward models, logits → reward
+        #     rewards = outputs.logits.squeeze(-1)
+        #     print("Score logits (not probabilities)", len(rewards))
+
+        # rewards = rewards.unsqueeze(1).expand(-1, T)  # [B, T]
+        # rewards = rewards.detach().cpu().tolist()
         print("Recast rewards", len(rewards))
 
         # if len(rewards) != REWARD_MODEL_BATCH_SIZE:
@@ -662,13 +696,13 @@ def main():
 
             bf16 = True
 
-    dataset = RewardDataset(
+    sft_model = SFTModel()
+
+    dataset = RewardDataset(sft_model,
         constitution_path='constitution.json', num_samples=2)
 
-    reward_model = RewardModel(dataset, bf16=bf16)
+    reward_model = RewardModel(sft_model, dataset, bf16=bf16)
     reward_model.train_reward_model()
-
-    sft_model = SFTModel()
 
     # ppo_trainer = PPOTrainerRLAIF(
     #     reward_model.get_reward_model(), sft_model, bf16=bf16)

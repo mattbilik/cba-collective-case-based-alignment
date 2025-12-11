@@ -100,21 +100,21 @@ def get_mistral_completion_multiturn(conversation_history,
 
     print(conversation_history)
     
-    def format_chat_ml(messages):
-        """
-        messages = [
-            {"role": "user", "content": "..."},
-            {"role": "assistant", "content": "..."},
-            ...
-        ]
-        """
-        text = ""
-        for msg in messages:
-            if msg["role"] == "user":
-                text += f"<s>[INST] {msg['content']} [/INST]"
-            else:
-                text += f" {msg['content']}</s>"
-        return text
+    # def format_chat_ml(messages):
+    #     """
+    #     messages = [
+    #         {"role": "user", "content": "..."},
+    #         {"role": "assistant", "content": "..."},
+    #         ...
+    #     ]
+    #     """
+    #     text = ""
+    #     for msg in messages:
+    #         if msg["role"] == "user":
+    #             text += f"<s>[INST] {msg['content']} [/INST]"
+    #         else:
+    #             text += f" {msg['content']}</s>"
+    #     return text
     
     conversation_history = [
         {'role': 'system', 'content': system_prompt},
