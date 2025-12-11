@@ -125,9 +125,9 @@ def get_mistral_completion_multiturn(conversation_history,
 
     output = model.generate(
         **inputs,
-        max_new_tokens=200,
+        # max_new_tokens=200,
         do_sample=True,
-        temperature=0.7
+        temperature=1
     )
 
     response = tokenizer.decode(output[0], skip_special_tokens=True)
@@ -224,8 +224,8 @@ def revise_responses_on_constitution_openai_multi_turn(constitution,
     
     # print(f'Prompt: {harmfulness_prompt}')
 
-    revision_instructions = random.choice(constitution['principles'])
-    random_principle = revision_instructions['description']
+    # revision_instructions = random.choice(constitution['principles'])
+    # random_principle = revision_instructions['description']
     
     initial_completion, reason = get_openai_completion_multiturn(
         harmfulness_prompt_history)
@@ -238,7 +238,9 @@ def revise_responses_on_constitution_openai_multi_turn(constitution,
     })
 
     for _ in range(number_of_revisions):
-        
+        revision_instructions = random.choice(constitution['principles'])
+        random_principle = revision_instructions['description']
+
         if CASE_REGIME == "constitution":
             revision_prompt = f"""
             
