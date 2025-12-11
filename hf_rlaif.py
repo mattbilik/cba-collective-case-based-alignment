@@ -2,12 +2,13 @@ import json
 import random
 import math
 import os
+import torch
+import gc
 from peft import LoraConfig, TaskType, PeftModel
 from transformers import AutoTokenizer, AutoModelForCausalLM, AutoModelForSequenceClassification
 from trl import RewardTrainer, RewardConfig, PPOTrainer, PPOConfig, GRPOTrainer, GRPOConfig
 from datasets import Dataset
 from tqdm import tqdm
-from torch import torch
 from preference_datasets import get_batch_iterator
 # from ai_completions import get_all_turns_from_hh_anthropic, _get_prompt_from_hh_anthropic
 
@@ -26,6 +27,37 @@ REWARD_MODEL_BATCH_SIZE = 8
 # Disable wandb logging
 os.environ["WANDB_DISABLED"] = "true"
 
+
+def free_cuda_memory(obj_list=None):
+    """
+    Delete objects in obj_list (if provided), run GC and empty CUDA cache.
+    Useful after saving/training models to fully free VRAM.
+    """
+
+    print('cuda_mem_allocated before:', torch.cuda.memory_allocated())
+    print('cuda_mem_reserved before:', torch.cuda.memory_reserved())
+
+    if obj_list:
+        for o in obj_list:
+            try:
+                del o
+            except Exception:
+                pass
+    gc.collect()
+    torch.cuda.empty_cache()
+
+    print('cuda_mem_allocated after:', torch.cuda.memory_allocated())
+    print('cuda_mem_reserved after:', torch.cuda.memory_reserved())
+
+    # Anything that's left
+    for obj in gc.get_objects():
+        try:
+            if torch.is_tensor(obj) or (hasattr(obj, 'data') and torch.is_tensor(obj.data)):
+                print(type(obj), obj.size(), obj.device)
+        except:
+            pass
+
+
 class SFTModel:
     # def __init__(self, model_name=BASE_MODEL, adapter_name=ADAPTER_MODEL, device="cpu"):
     def __init__(self, model_name=BASE_MODEL, device_map="auto"):
@@ -41,7 +73,7 @@ class SFTModel:
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
         self.device_map = device_map
         self.model_name = model_name
-        
+
     def generate_response(self, prompt,
                           max_new_tokens=100,
                           temperature=1.2,
@@ -203,7 +235,7 @@ class RewardDataset:
     def __init__(self, sft_model: SFTModel, constitution_path='constitution.json', num_samples=2):
 
         self.SFT_model = sft_model
-        
+
         with open(constitution_path, 'r') as f:
             self.constitution = json.load(f)
         self.num_samples = num_samples  # Number of prompts to process
@@ -521,11 +553,12 @@ class RewardModel:
         )
 
         trainer.train()
-        
+
         trainer.model.save_pretrained(self.adapter_dir)
         # trainer.tokenizer.save_pretrained(self.output_dir)
-        
-        base_model = AutoModelForSequenceClassification.from_pretrained(self.model_name)
+
+        base_model = AutoModelForSequenceClassification.from_pretrained(
+            self.model_name)
         lora_model = PeftModel.from_pretrained(base_model, self.adapter_dir)
 
         merged_model = lora_model.merge_and_unload()
@@ -551,19 +584,19 @@ class GRPOTrainerRLAIF:
         reward_model_name = reward_model.get_reward_model_name()
 
         # Determine the device map configuration
-        if torch.cuda.is_available():
-            device_map = "auto"
-            print(f"Need multi-GPU support: {device_map}")
-        else:
-            # Fallback to CPU if no CUDA device is available
-            device_map = "cpu"
-            print(f"Explicitly setting device_map to CPU: {device_map}")
+        # if torch.cuda.is_available():
+        device_map = "auto"
+        print(f"Need multi-GPU support: {device_map}")
+        # else:
+        #     # Fallback to CPU if no CUDA device is available
+        #     device_map = "cpu"
+        #     print(f"Explicitly setting device_map to CPU: {device_map}")
 
         self.dataset = reward_model.get_dataset()
 
         self.sft_model = AutoModelForCausalLM.from_pretrained(
             model_name,
-            device_map=device_map
+            device_map={"": 2}
         )
 
         self.tokenizer = AutoTokenizer.from_pretrained(
@@ -577,7 +610,7 @@ class GRPOTrainerRLAIF:
         # The reward model is actually already saved with the PEFT layers
         self.reward_model = AutoModelForSequenceClassification.from_pretrained(
             reward_model_name,
-            device_map=device_map
+            device_map={"": 1}
         )
 
         self.reward_tokenizer = AutoTokenizer.from_pretrained(
@@ -602,22 +635,19 @@ class GRPOTrainerRLAIF:
         texts = [p + c for p, c in zip(prompts, completions)]
 
         print("\nComputing reward for:", texts)
-        
+
         if self.reward_tokenizer.pad_token is None:
             self.reward_tokenizer.pad_token = self.reward_tokenizer.eos_token
 
         self.reward_tokenizer.pad_token_id = self.reward_tokenizer.eos_token_id
         self.reward_model.config.pad_token_id = self.reward_tokenizer.pad_token_id
-        
+
         enc = self.reward_tokenizer(
             texts,
             padding=True,
             truncation=True,
             return_tensors="pt"
         ).to(self.reward_model.device)
-        
-
-        T = enc["input_ids"].shape[1]
 
         print("Inputs IDs", len(enc["input_ids"]))
 
@@ -628,38 +658,25 @@ class GRPOTrainerRLAIF:
             # logits: [B, 1, 2] → [B, 2]
             logits = outputs.logits.squeeze(1)
 
-        # convert to scalar reward
-        # For sequence classification reward models, logits → reward
-        # scalar reward per sequence
-        rewards = logits[:, 1] - logits[:, 0]             # [B]
+            # convert to scalar reward
+            # For sequence classification reward models, logits --> reward
+            # scalar reward per sequence
+            rewards = logits[:, 1] - logits[:, 0]
 
-        # expand across token dimension
-        # rewards = rewards.unsqueeze(1).expand(-1, T)            # [B, T]  
-        
-        rewards = rewards.detach().cpu().tolist()      
-        # with torch.no_grad():
-        
-        
-        #     # What: get output logits from reward model for input and squeeze to get reward values
-
-        #     outputs = self.reward_model(**enc)
-        #     print("Logits", len(outputs.logits))
-
-        #     # For sequence classification reward models, logits → reward
-        #     rewards = outputs.logits.squeeze(-1)
-        #     print("Score logits (not probabilities)", len(rewards))
-
-        # rewards = rewards.unsqueeze(1).expand(-1, T)  # [B, T]
-        # rewards = rewards.detach().cpu().tolist()
+        rewards = rewards.detach().cpu().tolist()
         print("Recast rewards", len(rewards))
 
-        # if len(rewards) != REWARD_MODEL_BATCH_SIZE:
-        #     raise ValueError("Reward length does not match batch size")
-
-        # convert to python floats
         return rewards
 
     def train_and_save_model(self):
+
+        peft_config = LoraConfig(
+            task_type=TaskType.SEQ_CLS,
+            inference_mode=False,
+            r=8,
+            lora_alpha=32,
+            lora_dropout=0.1,
+        )
 
         grpo_config = GRPOConfig(
             output_dir="./grpo_model_constitution_checkpoints",
@@ -673,10 +690,20 @@ class GRPOTrainerRLAIF:
             args=grpo_config,
             train_dataset=self.dataset,
             reward_funcs=[self.reward_fn],
+            peft_config=peft_config
         )
 
         grpo_trainer.train()
-        grpo_trainer.save_model("grpo_model_constitution")
+        grpo_trainer.save_model("grpo_model_constitution_adapter")
+
+        base_model = AutoModelForCausalLM.from_pretrained(BASE_MODEL)
+        lora_model = PeftModel.from_pretrained(
+            base_model, "grpo_model_constitution_adapter")
+
+        merged_model = lora_model.merge_and_unload()
+
+        merged_model.save_pretrained("grpo_model_constitution_FINAL")
+        grpo_trainer.tokenizer.save_pretrained("grpo_model_constitution_FINAL")
 
 
 def main():
@@ -699,19 +726,17 @@ def main():
     sft_model = SFTModel()
 
     dataset = RewardDataset(sft_model,
-        constitution_path='constitution.json', num_samples=2)
+                            constitution_path='constitution.json', num_samples=2)
 
     reward_model = RewardModel(sft_model, dataset, bf16=bf16)
     reward_model.train_reward_model()
 
-    # ppo_trainer = PPOTrainerRLAIF(
-    #     reward_model.get_reward_model(), sft_model, bf16=bf16)
-    
+    free_cuda_memory()
+
     grpo_trainer = GRPOTrainerRLAIF(
         reward_model, sft_model)
 
-    # Train sft_model with PPO and save
-    # ppo_trainer.train_and_save_model()
+    # Train sft_model with GRPO and save
     grpo_trainer.train_and_save_model()
 
 
