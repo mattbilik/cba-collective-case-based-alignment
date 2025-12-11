@@ -2,11 +2,12 @@ from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
     BitsAndBytesConfig,
-    HfArgumentParser,
     TrainingArguments,
-    pipeline,
-    logging,
 )
+
+# https://github.com/axolotl-ai-cloud/axolotl/issues/1436
+# BitsAndBytes doesn't support Mac M1/M2 or intel chips
+
 from trl import SFTTrainer
 from torch import torch
 from peft import LoraConfig, PeftModel
@@ -20,11 +21,10 @@ import os
 os.environ["WANDB_DISABLED"] = "true"
 
 # Hugging Face computes the best device_map (GPU) for us automatically
-device_map = "auto"
+
 # Want to specify GPU training
-# if torch.cuda.is_available():
-#     device_map = {"": 0}
-#     print(f"Using CUDA device: {device_map}")
+device_map={'' : torch.cuda.current_device()}
+print(f"Using CUDA device: {device_map}")
 
 # Activate 4-bit precision base model loading
 use_4bit = True
@@ -61,6 +61,7 @@ finetuned_model = AutoModelForCausalLM.from_pretrained(
     model_name,
     quantization_config=bnb_config,
     device_map=device_map,
+    torch_dtype=torch.float16,
 )
 
 finetuned_model.config.use_cache = False
@@ -119,7 +120,7 @@ tokenized_dataset = dataset.map(tokenize, batched=True, remove_columns=dataset.c
 
 # --------------- Fine-Tuning -----------------
 
-output_dir="./finetuned-constitution-qwen-1.5b"
+output_dir="qwen-1.5b-constitution-checkpoints"
 num_train_epochs = 1
 
 # Enable fp16/bf16 training (set bf16 to True with an A100)
@@ -133,7 +134,7 @@ per_device_train_batch_size = 4
 per_device_eval_batch_size = 4
 
 # Number of update steps to accumulate the gradients for
-gradient_accumulation_steps = 1
+gradient_accumulation_steps = 8
 
 # Enable gradient checkpointing
 gradient_checkpointing = True
@@ -189,28 +190,19 @@ training_arguments = TrainingArguments(
     report_to="tensorboard"
 )
 
-# Maximum sequence length to use
-max_seq_length = None
-
-# Pack multiple short examples in the same input sequence to increase efficiency
-packing = False
-
 # TRL calls get_peft_model() automatically with peft_config
 trainer = SFTTrainer(
     model=finetuned_model,
     train_dataset=tokenized_dataset,
     peft_config=lora_config,
-    max_seq_length=max_seq_length,
-    tokenizer=tokenizer,
     args=training_arguments,
-    packing=packing,
 )
 
 # Train model
 trainer.train()
 
 # Save trained model
-trainer.model.save_pretrained("qwen-1.5b-constitution-peft")
+trainer.model.save_pretrained("Qwen-1.5b-constitution-peft")
 
 # --------------- Merging Weights from Base Model and Fine-tuned Model -----------------
 base_model = AutoModelForCausalLM.from_pretrained(
@@ -220,10 +212,14 @@ base_model = AutoModelForCausalLM.from_pretrained(
     torch_dtype=torch.float16,
     device_map=device_map,
 )
-model = PeftModel.from_pretrained(base_model, output_dir)
+
+# Load fine-tuned model from the the previous step
+model = PeftModel.from_pretrained(base_model, "Qwen-1.5b-constitution-peft")
 model = model.merge_and_unload()
+model.save_pretrained("final-Qwen-1.5b-constitution-peft")
 
 # Reload tokenizer to save it
 tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
 tokenizer.pad_token = tokenizer.eos_token
 tokenizer.padding_side = "right"
+tokenizer.save_pretrained("final-Qwen-1.5b-constitution-peft")

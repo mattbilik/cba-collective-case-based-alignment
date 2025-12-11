@@ -89,7 +89,7 @@ def get_openai_completion_multiturn(conversation_history,
         return [c_['message']['content'] for c_ in c['choices']]
     
 def get_mistral_completion_multiturn(conversation_history,
-                          model_name='mistralai/Mistral-7B-v0.1',
+                          model_name='Qwen/Qwen2-1.5B',
                           system_prompt='You are a helpful assistant.'):
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     model = AutoModelForCausalLM.from_pretrained(
@@ -97,6 +97,8 @@ def get_mistral_completion_multiturn(conversation_history,
         torch_dtype=torch.float16,
         device_map="auto"
     )
+
+    print(conversation_history)
     
     def format_chat_ml(messages):
         """
@@ -118,7 +120,7 @@ def get_mistral_completion_multiturn(conversation_history,
         {'role': 'system', 'content': system_prompt},
         *conversation_history,
     ]
-    prompt = format_chat_ml(conversation_history)
+    # prompt = format_chat_ml(conversation_history)
     inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
 
     output = model.generate(
@@ -405,107 +407,111 @@ def revise_responses_on_constitution_mistral_multi_turn(constitution,
 
     return completion_to_revise, initial_completion
 
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--ff', type=int, default=1)
-    parser.add_argument('--cache_dir', type=str,
-                        default=os.getenv("PROJECT_CACHE", "~/.cache"))
-    parser.add_argument('--data_fraction', type=float, default=1.0)
-    parser.add_argument('--ai_model', type=str, default='gpt4')
-    parser.add_argument('--base_output_dir', type=str,
-                        default=f"{os.getenv('PROJECT_CACHE', '~/.cache')}/hh_data")
-    parser.add_argument('--num_completions', type=int, default=100)
-    parser.add_argument('--constitution', type=str,
-                        default='constitution.json')
+# parser = argparse.ArgumentParser()
+# parser.add_argument('--ff', type=int, default=1)
+# parser.add_argument('--cache_dir', type=str,
+#                     default=os.getenv("PROJECT_CACHE", "~/.cache"))
+# parser.add_argument('--data_fraction', type=float, default=1.0)
+# parser.add_argument('--ai_model', type=str, default='gpt4')
+# parser.add_argument('--base_output_dir', type=str,
+#                     default=f"{os.getenv('PROJECT_CACHE', '~/.cache')}/hh_data")
+# parser.add_argument('--num_completions', type=int, default=100)
+# parser.add_argument('--constitution', type=str,
+#                     default='constitution.json')
+
+# args = parser.parse_args()
+
+args = {
+    "num_completions": 100,
+    "ai_model": "Qwen1.5",
+    "base_output_dir": f"{os.getenv('PROJECT_CACHE', '~/.cache')}/hh_data",
+    "cache_dir": os.getenv("PROJECT_CACHE", "~/.cache"),
+    "data_fraction": 1.0,
+    "ff": 1,
+    "constitution": "constitution.json",
+}
+
+with open('constitution.json', 'r') as f:
+    constitution = json.load(f)
+
+# Limit number of completions if specified
+if args["num_completions"] <= 0:
+    raise ValueError(
+        'num_completions must be positive integer that is greater than 0')
+
+
+if CASE_REGIME == "case":
+    print("Using CASE-based revision regime.")   
     
-    args = parser.parse_args()
-
-    with open('constitution.json', 'r') as f:
-        constitution = json.load(f)
-
-    # Limit number of completions if specified
-    if args.num_completions <= 0:
-        raise ValueError(
-            'num_completions must be positive integer that is greater than 0')
-
-    if args.ai_model in ['gpt4']:
-        openai.api_key = os.getenv('OPENAI_API_KEY')
-        _openai_chat_completion = _cached_function(
-            openai.ChatCompletion.create)
+    embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
     
-    if CASE_REGIME == "case":
-        print("Using CASE-based revision regime.")   
-        
-        embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
-        
-        for principle in constitution['principles']:
-            print(f"Principle: {principle['principle']}")
-            embeddings = embedding_model.encode(principle['cases'])
-            principle['case_embeddings'] = embeddings
-                
-    elif CASE_REGIME == "constitution":
-        print("Using CONSTITUTION-based revision regime.") 
-        
-        
-    # Use llama tokenizer for tokenizing prompts from Anthropic helpfulness dataset
-    tokenizer = AutoTokenizer.from_pretrained(
-        'huggyllama/llama-7b')
-    tokenizer.pad_token_id = tokenizer.eos_token_id
+    for principle in constitution['principles']:
+        print(f"Principle: {principle['principle']}")
+        embeddings = embedding_model.encode(principle['cases'])
+        principle['case_embeddings'] = embeddings
+            
+elif CASE_REGIME == "constitution":
+    print("Using CONSTITUTION-based revision regime.") 
+    
+    
+# Use llama tokenizer for tokenizing prompts from Anthropic helpfulness dataset
+tokenizer = AutoTokenizer.from_pretrained(
+    'huggyllama/llama-7b')
+tokenizer.pad_token_id = tokenizer.eos_token_id
 
-    # Processing helpfulness, harmfulness dataset from Anthropic
-    prompt_iterator = get_batch_iterator(['hh'], tokenizer=tokenizer, split='train', batch_size=1, sft_mode=True,
-                                         seed=0, n_epochs=1, cache_dir=args.cache_dir, shuffle=False,
-                                         # doesn't matter, as we use complete prompt for GPT-4/Claude
-                                         max_prompt_length=256, max_length=512,
-                                         num_turns=1, data_fraction=args.data_fraction, prefs_path=None, sampled_data_dir=None)
+# Processing helpfulness, harmfulness dataset from Anthropic
+prompt_iterator = get_batch_iterator(['hh'], tokenizer=tokenizer, split='train', batch_size=1, sft_mode=True,
+                                      seed=0, n_epochs=1, cache_dir=args["cache_dir"], shuffle=False,
+                                      # doesn't matter, as we use complete prompt for GPT-4/Claude
+                                      max_prompt_length=256, max_length=512,
+                                      num_turns=1, data_fraction=args["data_fraction"], prefs_path=None, sampled_data_dir=None)
 
-    def _get_prompt_from_hh_anthropic(instruction):
-        # Extract the first human prompt before the assistant response to make all data 1-turn (e.g. "Hi, I want to learn to play horseshoes. Can you teach me?")
-        relevant_instruction = instruction.partition(
-            '\n\nAssistant:')[0].partition('Human:')[2].strip()
-        return relevant_instruction
+def _get_prompt_from_hh_anthropic(instruction):
+    # Extract the first human prompt before the assistant response to make all data 1-turn (e.g. "Hi, I want to learn to play horseshoes. Can you teach me?")
+    relevant_instruction = instruction.partition(
+        '\n\nAssistant:')[0].partition('Human:')[2].strip()
+    return relevant_instruction
 
-    def _dump_files(responses):
-        with open(os.path.join(args.base_output_dir, f'hh_anthropic_1turn_df{args.data_fraction}_ff{args.ff}_{args.ai_model}_completions_many.json'), 'w') as f:
-            json.dump(responses, f, indent=2)
-        print('Saved to file')
+def _dump_files(responses):
+    with open(os.path.join(args["base_output_dir"], f'hh_anthropic_1turn_df{args["data_fraction"]}_ff{args["ff"]}_{args["ai_model"]}_completions_many.json'), 'w+') as f:
+        json.dump(responses, f, indent=2)
+    print('Saved to file')
 
-    responses = {}
-    prompt_idx = 0
-    if args.ff > 0:
-        print(f'fastforwarding {args.ff} prompts')
+responses = {}
+prompt_idx = 0
+if args["ff"] > 0:
+    print(f'fastforwarding {args["ff"]} prompts')
 
-    for batch in prompt_iterator:
-        prompt_idx += 1
-        print(f' Processing batch: {prompt_idx}')
+for batch in prompt_iterator:
+    prompt_idx += 1
+    print(f' Processing batch: {prompt_idx}')
 
-        if prompt_idx < args.ff:
-            continue
+    if prompt_idx < args["ff"]:
+        continue
 
-        if prompt_idx > args.num_completions:
-            break
+    if prompt_idx > args["num_completions"]:
+        break
 
-        print(f'prompt_idx: {prompt_idx}')
+    print(f'prompt_idx: {prompt_idx}')
 
-        prompt = _get_prompt_from_hh_anthropic(batch['prompt'][0])
-        if len(prompt.split()) >= 2000 or len(prompt) >= 8000:
-            print('Skipping due to length')
-            continue
+    prompt = _get_prompt_from_hh_anthropic(batch['prompt'][0])
+    if len(prompt.split()) >= 2000 or len(prompt) >= 8000:
+        print('Skipping due to length')
+        continue
 
-        if args.ai_model == 'gpt4':
-            # final_completion, initial_completion = revise_responses_on_constitution_openai_single_turn(
-            #     constitution, batch, number_of_revisions=5)
-            final_completion, initial_completion = revise_responses_on_constitution_openai_multi_turn(
-                constitution, batch, number_of_revisions=5)
-            # final_completion, initial_completion = revise_responses_on_constitution_mistral_multi_turn(
-            #     constitution, batch, number_of_revisions=3)
+    # final_completion, initial_completion = revise_responses_on_constitution_openai_single_turn(
+    #     constitution, batch, number_of_revisions=5)
+    # final_completion, initial_completion = revise_responses_on_constitution_openai_multi_turn(
+    #     constitution, batch, number_of_revisions=5)
+    final_completion, initial_completion = revise_responses_on_constitution_mistral_multi_turn(
+        constitution, batch, number_of_revisions=3)
 
-        # Store both initial and final completions
-        responses[prompt] = [
-            final_completion.strip(), initial_completion.strip()]
+    # Store both initial and final completions
+    responses[prompt] = [
+        final_completion.strip(), initial_completion.strip()]
 
-        if prompt_idx % 10 == 0:
-            print(f'finished generating {prompt_idx} prompts')
-            _dump_files(responses)
+    if prompt_idx % 10 == 0:
+        print(f'finished generating {prompt_idx} prompts')
+        _dump_files(responses)
 
-    _dump_files(responses)
+_dump_files(responses)

@@ -13,8 +13,6 @@ From: nvidia/cuda:12.2.2-base-ubuntu22.04
         build-essential wget bzip2 git ca-certificates && \
         apt-get clean && rm -rf /var/lib/apt/lists/*
 
-    apt-get -y install vim
-
     echo "===== [MINICONDA] Installing Miniconda3 ====="
     wget -q https://repo.anaconda.com/miniconda/Miniconda3-py311_24.11.1-0-Linux-x86_64.sh -O /tmp/miniconda.sh
     bash /tmp/miniconda.sh -b -p /opt/conda
