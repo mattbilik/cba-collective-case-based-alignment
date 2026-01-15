@@ -94,11 +94,9 @@ def get_mistral_completion_multiturn(conversation_history,
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     model = AutoModelForCausalLM.from_pretrained(
         model_name,
-        torch_dtype=torch.float16,
+        dtype=torch.float16,
         device_map="auto"
     )
-
-    print(conversation_history)
     
     # def format_chat_ml(messages):
     #     """
@@ -120,6 +118,9 @@ def get_mistral_completion_multiturn(conversation_history,
         {'role': 'system', 'content': system_prompt},
         *conversation_history,
     ]
+    
+    print(f"CONVERSATION HISTORY: {conversation_history}\n")
+    
     # prompt = format_chat_ml(conversation_history)
     inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
 
@@ -199,6 +200,7 @@ def get_all_turns_from_hh_anthropic(dialogue: str) -> list[str, str]:
     return dialogue_pairs
 
 
+
 def revise_responses_on_constitution_openai_multi_turn(constitution,
                                                        batch,
                                                        number_of_revisions=4) -> str:
@@ -218,7 +220,6 @@ def revise_responses_on_constitution_openai_multi_turn(constitution,
     # print(batch['prompt'][0])
     print("Harmfulness prompt history", harmfulness_prompt_history)
     
-    
     # TODO: do we pass the harmfulness prompt history or just the prompt?
     harmfulness_prompt = _get_prompt_from_hh_anthropic(batch['prompt'][0])
     
@@ -231,6 +232,8 @@ def revise_responses_on_constitution_openai_multi_turn(constitution,
         harmfulness_prompt_history)
 
     completion_to_revise = initial_completion.strip()
+    
+    print(f"COMPLETION TO REVISE {completion_to_revise}\n")
 
     harmfulness_prompt_history.append({
         'role': 'assistant',
@@ -344,16 +347,14 @@ def revise_responses_on_constitution_mistral_multi_turn(constitution,
     for _ in range(number_of_revisions):
         
         if CASE_REGIME == "constitution":
-            revision_prompt = f"""
-            
-                The following is an original response to a user prompt, followed by a revision instruction.
+            revision_prompt = f"""The following is an original response to a user prompt, followed by a revision instruction.
                 Please revise the original response according to the revision instruction and output only the revised response as plain text.
                 
                 User prompt: {harmfulness_prompt}
                 Original response: {completion_to_revise}
                 Revision principle: {random_principle}
-                Revised response:
-                """
+                Revised response:"""
+                
         elif CASE_REGIME == "case":
             
             cases = revision_instructions['cases']
@@ -378,17 +379,14 @@ def revise_responses_on_constitution_mistral_multi_turn(constitution,
             # random_case = random.choice(revision_instructions['cases'])['case']
             
                         
-            revision_prompt = f"""
-            
-                The following is an original response to a user prompt, followed by a revision instruction.
+            revision_prompt = f"""The following is an original response to a user prompt, followed by a revision instruction.
                 Please revise the original response according to the revision instruction and output only the revised response as plain text.
                 
                 User prompt: {harmfulness_prompt}
                 Original response: {completion_to_revise}
                 Revision principle: {random_principle}
                 Revision cases: {top_k_cases}
-                Revised response:
-                """
+                Revised response:"""
 
         # Add the new prompt to the conversation history
         harmfulness_prompt_history.append({
@@ -407,7 +405,7 @@ def revise_responses_on_constitution_mistral_multi_turn(constitution,
             'content': revised_response
         })
 
-    return completion_to_revise, initial_completion
+    return completion_to_revise, initial_completion, harmfulness_prompt_history
 
 # parser = argparse.ArgumentParser()
 # parser.add_argument('--ff', type=int, default=1)
@@ -425,7 +423,7 @@ def revise_responses_on_constitution_mistral_multi_turn(constitution,
 
 args = {
     "num_completions": 100,
-    "ai_model": "Qwen1.5",
+    "ai_model": "Qwen7",
     "base_output_dir": f"{os.getenv('PROJECT_CACHE', '~/.cache')}/hh_data",
     "cache_dir": os.getenv("PROJECT_CACHE", "~/.cache"),
     "data_fraction": 1.0,
@@ -455,10 +453,13 @@ if CASE_REGIME == "case":
 elif CASE_REGIME == "constitution":
     print("Using CONSTITUTION-based revision regime.") 
     
-    
-# Use llama tokenizer for tokenizing prompts from Anthropic helpfulness dataset
+# Use Qwen for tokenizing prompts from Anthropic helpfulness dataset Qwen/Qwen2-7B
+# tokenizer = AutoTokenizer.from_pretrained(
+#     'Qwen/Qwen2-1.5B')
+
 tokenizer = AutoTokenizer.from_pretrained(
-    'huggyllama/llama-7b')
+    'Qwen/Qwen2-1.5B')
+
 tokenizer.pad_token_id = tokenizer.eos_token_id
 
 # Processing helpfulness, harmfulness dataset from Anthropic
@@ -505,7 +506,7 @@ for batch in prompt_iterator:
     #     constitution, batch, number_of_revisions=5)
     # final_completion, initial_completion = revise_responses_on_constitution_openai_multi_turn(
     #     constitution, batch, number_of_revisions=5)
-    final_completion, initial_completion = revise_responses_on_constitution_mistral_multi_turn(
+    final_completion, initial_completion, harmfulness_prompt_history = revise_responses_on_constitution_mistral_multi_turn(
         constitution, batch, number_of_revisions=3)
 
     # Store both initial and final completions
