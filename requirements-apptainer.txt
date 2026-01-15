@@ -10,3 +10,4 @@ bs4
 openai
 dotenv
 sentence-transformers
+archieml
