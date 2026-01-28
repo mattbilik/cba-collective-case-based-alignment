@@ -87,7 +87,13 @@ class SFTModel:
 
         # Setting do_sample to be true so we get more diverse outputs
         outputs = self.model.generate(
-            **inputs, max_new_tokens=max_new_tokens, temperature=temperature, do_sample=True)
+            **inputs, 
+            max_new_tokens=max_new_tokens, 
+            temperature=temperature, 
+            do_sample=True,
+            pad_token_id=self.tokenizer.eos_token_id
+        )
+        
         response = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
         return response
 
@@ -108,7 +114,6 @@ class PPOTrainerRLAIF:
         dataset: Dataset object with prompts to train on
         model_name: name of the base model to fine-tune with PPO
         device: device to run on
-
         """
 
         dataset = model_to_PPO.dataset
@@ -231,7 +236,7 @@ class PPOTrainerRLAIF:
 
 
 class RewardDataset:
-    def __init__(self, sft_model: SFTModel, constitution_path='constitution.json', num_samples=2):
+    def __init__(self, sft_model: SFTModel, constitution_path='constitution.json', num_samples=1000):
 
         self.SFT_model = sft_model
 
@@ -442,6 +447,7 @@ class RewardDataset:
 
         for prompt, log_prob in log_probs.items():
 
+            # Printing probability, chosen, and rejected responses
             print(log_prob)
             log_prob, chosen_response, rejected_response = log_probs[prompt]
 
@@ -466,7 +472,7 @@ class RewardDataset:
         1. For each prompt, generate two responses using the SFT model.
         2. Randomly select a constitutional principle.
         3. Compute log probabilities that one response is better aligned than the other.
-        4. Store the results in a dataset for reward model training.
+        4. Store the results (the logs) in a dataset for reward model training.
         """
 
         log_probs = {}
@@ -497,7 +503,7 @@ class RewardDataset:
 
 
 class RewardModel:
-    def __init__(self, sft_model: SFTModel, reward_data: RewardDataset, bf16=False):
+    def __init__(self, sft_model: SFTModel, reward_data: RewardDataset):
 
         # TODO: Probably do something with device here
         self.dataset = reward_data.get_dataset()
@@ -506,7 +512,6 @@ class RewardModel:
         self.checkpoint_dir = f"./reward-model-constitution-{self.model_name}-checkpoints"
         self.adapter_dir = f"./reward-model-constitution-{self.model_name}-adapters"
         self.output_dir = f"./final-reward-model-constitution-{self.model_name}"
-        self.bf16 = bf16
 
     def train_reward_model(self):
 
@@ -532,9 +537,7 @@ class RewardModel:
             per_device_train_batch_size=2,
             learning_rate=2e-5,
             logging_steps=10,
-            bf16=self.bf16,  # turn off bf16
-            # TODO: turn on fp16 when training on Hyak
-            # fp16=True,
+            fp16=True
         )
 
         peft_config = LoraConfig(
@@ -708,27 +711,25 @@ class GRPOTrainerRLAIF:
 
 def grpo_sft_model_with_reward_model(model_name: str = BASE_MODEL, constitution_path='constitution.json'):
 
-    bf16 = False
     use_4bit = True
     bnb_4bit_compute_dtype = "float16"
     compute_dtype = getattr(torch, bnb_4bit_compute_dtype)
+    
+    # Want to use float16 or fp16 because lower precision uses less memory
 
     if compute_dtype == torch.float16 and use_4bit:
         major, _ = torch.cuda.get_device_capability()
-
-        if major >= 8:
-            print("=" * 80)
-            print("GPU supports bfloat16: accelerate training with bf16=True")
-            print("=" * 80)
-
-            bf16 = True
+        if major < 8:
+            print(
+                f"Warning: Using float16 on a GPU with compute capability {major} may lead to instability. Consider using bfloat16 instead."
+            )
 
     sft_model = SFTModel(model_name=model_name)
 
     dataset = RewardDataset(sft_model,
-                            constitution_path=constitution_path, num_samples=2)
+                            constitution_path=constitution_path, num_samples=1000)
 
-    reward_model = RewardModel(sft_model, dataset, bf16=bf16)
+    reward_model = RewardModel(sft_model, dataset)
     reward_model.train_reward_model()
 
     free_cuda_memory()
