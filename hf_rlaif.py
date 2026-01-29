@@ -17,7 +17,7 @@ from preference_datasets import get_batch_iterator
     - Also ask model to generate a score for each response 
         (i.e. a proportion that captures alignment to constitutional principles)
 2. Use pairs and scores (proportions) to train reward model (Qwen, although we can change this).
-3. PPO SFT'd model with RLAIF model as reward model.
+3. GPPO SFT'd model with RLAIF model as reward model.
 """
 
 # SFT'd model
@@ -27,36 +27,15 @@ REWARD_MODEL_BATCH_SIZE = 8
 # Disable wandb logging
 os.environ["WANDB_DISABLED"] = "true"
 
-
-def free_cuda_memory(obj_list=None):
-    """
-    Delete objects in obj_list (if provided), run GC and empty CUDA cache.
-    Useful after saving/training models to fully free VRAM.
-    """
+def free_cuda_memory():
 
     print('cuda_mem_allocated before:', torch.cuda.memory_allocated())
     print('cuda_mem_reserved before:', torch.cuda.memory_reserved())
 
-    if obj_list:
-        for o in obj_list:
-            try:
-                del o
-            except Exception:
-                pass
-    gc.collect()
     torch.cuda.empty_cache()
 
     print('cuda_mem_allocated after:', torch.cuda.memory_allocated())
     print('cuda_mem_reserved after:', torch.cuda.memory_reserved())
-
-    # Anything that's left
-    for obj in gc.get_objects():
-        try:
-            if torch.is_tensor(obj) or (hasattr(obj, 'data') and torch.is_tensor(obj.data)):
-                print(type(obj), obj.size(), obj.device)
-        except:
-            pass
-
 
 class SFTModel:
     # def __init__(self, model_name=BASE_MODEL, adapter_name=ADAPTER_MODEL, device="cpu"):
@@ -87,7 +66,13 @@ class SFTModel:
 
         # Setting do_sample to be true so we get more diverse outputs
         outputs = self.model.generate(
-            **inputs, max_new_tokens=max_new_tokens, temperature=temperature, do_sample=True)
+            **inputs, 
+            max_new_tokens=max_new_tokens, 
+            temperature=temperature, 
+            do_sample=True,
+            pad_token_id=self.tokenizer.eos_token_id
+        )
+        
         response = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
         return response
 
@@ -96,7 +81,6 @@ class SFTModel:
 
     def get_model_name(self):
         return self.model_name
-
 
 class PPOTrainerRLAIF:
 
@@ -109,7 +93,6 @@ class PPOTrainerRLAIF:
         dataset: Dataset object with prompts to train on
         model_name: name of the base model to fine-tune with PPO
         device: device to run on
-
         """
 
         dataset = model_to_PPO.dataset
@@ -232,7 +215,7 @@ class PPOTrainerRLAIF:
 
 
 class RewardDataset:
-    def __init__(self, sft_model: SFTModel, constitution_path='constitution.json', num_samples=2):
+    def __init__(self, sft_model: SFTModel, constitution_path='constitution.json', num_samples=1000):
 
         self.SFT_model = sft_model
 
@@ -443,6 +426,7 @@ class RewardDataset:
 
         for prompt, log_prob in log_probs.items():
 
+            # Printing probability, chosen, and rejected responses
             print(log_prob)
             log_prob, chosen_response, rejected_response = log_probs[prompt]
 
@@ -467,7 +451,7 @@ class RewardDataset:
         1. For each prompt, generate two responses using the SFT model.
         2. Randomly select a constitutional principle.
         3. Compute log probabilities that one response is better aligned than the other.
-        4. Store the results in a dataset for reward model training.
+        4. Store the results (the logs) in a dataset for reward model training.
         """
 
         log_probs = {}
@@ -490,6 +474,9 @@ class RewardDataset:
             log_prob, chosen_response, rejected_response = self.__generate_log_probs(
                 prompt, principle, resp_1, resp_2)
             log_probs[prompt] = [log_prob, chosen_response, rejected_response]
+            
+        # Move SFT model back to CPU to free up GPU memory
+        self.SFT_model.to("cpu")
 
         self.__generate_dataset(log_probs)
 
@@ -498,15 +485,15 @@ class RewardDataset:
 
 
 class RewardModel:
-    def __init__(self, sft_model: SFTModel, reward_data: RewardDataset, bf16=False):
+    def __init__(self, sft_model: SFTModel, reward_data: RewardDataset):
 
         # TODO: Probably do something with device here
         self.dataset = reward_data.get_dataset()
-        self.checkpoint_dir = "./reward-model-constitution-Qwen-1.5b-checkpoints"
-        self.adapter_dir = "./reward-model-constitution-Qwen-1.5b-adapters"
-        self.output_dir = "./final-reward-model-constitution-Qwen-1.5b"
-        self.bf16 = bf16
         self.model_name = sft_model.get_model_name()
+
+        self.checkpoint_dir = f"./reward-model-constitution-{self.model_name}-checkpoints"
+        self.adapter_dir = f"./reward-model-constitution-{self.model_name}-adapters"
+        self.output_dir = f"./final-reward-model-constitution-{self.model_name}"
 
     def train_reward_model(self):
 
@@ -532,14 +519,14 @@ class RewardModel:
             per_device_train_batch_size=2,
             learning_rate=2e-5,
             logging_steps=10,
-            bf16=self.bf16,  # turn off bf16
-            # TODO: turn on fp16 when training on Hyak
-            # fp16=True,
+            fp16=True
         )
 
         peft_config = LoraConfig(
             task_type=TaskType.SEQ_CLS,
             inference_mode=False,
+            
+            # Rank or the size of the matrices
             r=8,
             lora_alpha=32,
             lora_dropout=0.1,
@@ -552,6 +539,8 @@ class RewardModel:
             peft_config=peft_config,
         )
 
+        # Print out the memory we have available before training
+        
         trainer.train()
 
         trainer.model.save_pretrained(self.adapter_dir)
@@ -706,29 +695,29 @@ class GRPOTrainerRLAIF:
         grpo_trainer.tokenizer.save_pretrained("grpo_model_constitution_FINAL")
 
 
-def main():
+def grpo_sft_model_with_reward_model(model_name: str = BASE_MODEL, constitution_path='constitution.json'):
 
-    bf16 = False
     use_4bit = True
     bnb_4bit_compute_dtype = "float16"
     compute_dtype = getattr(torch, bnb_4bit_compute_dtype)
+    
+    # Want to use float16 or fp16 because lower precision uses less memory
 
     if compute_dtype == torch.float16 and use_4bit:
         major, _ = torch.cuda.get_device_capability()
+        if major < 8:
+            print(
+                f"Warning: Using float16 on a GPU with compute capability {major} may lead to instability. Consider using bfloat16 instead."
+            )
 
-        if major >= 8:
-            print("=" * 80)
-            print("GPU supports bfloat16: accelerate training with bf16=True")
-            print("=" * 80)
-
-            bf16 = True
-
-    sft_model = SFTModel()
-
+    sft_model = SFTModel(model_name=model_name)
+    
     dataset = RewardDataset(sft_model,
-                            constitution_path='constitution.json', num_samples=2)
+                            constitution_path=constitution_path, num_samples=1000)
 
-    reward_model = RewardModel(sft_model, dataset, bf16=bf16)
+    free_cuda_memory()
+
+    reward_model = RewardModel(sft_model, dataset)
     reward_model.train_reward_model()
 
     free_cuda_memory()
@@ -741,7 +730,7 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    grpo_sft_model_with_reward_model()
 
 # TODO: initial SFT responses generated by our model
 # TODO: don't use margin to fine-tune our reward model

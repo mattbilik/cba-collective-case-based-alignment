@@ -20,6 +20,14 @@ import os
 # Disable wandb logging
 os.environ["WANDB_DISABLED"] = "true"
 
+# Slightly bigger model
+# https://huggingface.co/Qwen/Qwen2-0.5B
+
+# Using a 0.5 billion parameter model for demonstration, then PEFT with LoRA
+# model_name = "Qwen/Qwen2-0.5B"
+
+MODEL_NAME = "Qwen/Qwen2-1.5B"
+
 # Hugging Face computes the best device_map (GPU) for us automatically
 
 # Want to specify GPU training
@@ -37,13 +45,6 @@ use_nested_quant = False
 
 compute_dtype = getattr(torch, bnb_4bit_compute_dtype)
 
-# Slightly bigger model
-# https://huggingface.co/Qwen/Qwen2-0.5B
-
-# Using a 0.5 billion parameter model for demonstration, then PEFT with LoRA
-# model_name = "Qwen/Qwen2-0.5B"
-model_name = "Qwen/Qwen2-1.5B"
-
 # Fine-tuning on self-revised responses from HH dataset with our constitution
 bnb_config = BitsAndBytesConfig(
     load_in_4bit=use_4bit,
@@ -52,13 +53,113 @@ bnb_config = BitsAndBytesConfig(
     bnb_4bit_use_double_quant=use_nested_quant,
 )
 
+class Finetuner:
+    def __init__(self, model_name):
+        self.model_name = model_name
+        
+        model_to_tune = AutoModelForCausalLM.from_pretrained(
+            self.model_name,
+            quantization_config=bnb_config,
+            device_map=device_map,
+            torch_dtype=torch.float16,
+        )
+        
+        model_to_tune.config.use_cache = False
+        model_to_tune.config.pretraining_tp = 1
+        
+        self.model_to_tune = model_to_tune
+
+    def __tokenize(self, batch):
+        tokenizer = AutoTokenizer.from_pretrained(self.model_name)
+        tokenizer.pad_token = tokenizer.eos_token
+        tokenizer.padding_side = "right" # Fix weird overflow issue with fp16 training
+        
+        combined = [p + "\n" + c for p, c in zip(batch["prompt"], batch["final_completion"])]
+        tokenized = tokenizer(
+            combined,
+            truncation=True,
+            padding="max_length",
+            max_length=512,
+        )
+        
+        # Model is fine-tuned (via "labels") to produce the input sequence (prompt and final completion)
+        tokenized["labels"] = tokenized["input_ids"].copy()
+        return tokenized
+
+    def __create_tokenized_dataset(self):
+        self.tokenized_dataset = dataset.map(self.__tokenize, batched=True, remove_columns=dataset.column_names)
+
+    def __finetune_sft(self):
+        
+        self.__create_tokenized_dataset()
+        
+        output_dir=f"{self.model_name}-constitution-checkpoints"
+
+        training_arguments = TrainingArguments(
+            output_dir=output_dir,
+            num_train_epochs=num_train_epochs,
+            per_device_train_batch_size=per_device_train_batch_size,
+            gradient_accumulation_steps=gradient_accumulation_steps,
+            optim=optim,
+            save_steps=save_steps,
+            logging_steps=logging_steps,
+            learning_rate=learning_rate,
+            weight_decay=weight_decay,
+            fp16=fp16,
+            bf16=bf16,
+            max_grad_norm=max_grad_norm,
+            max_steps=max_steps,
+            warmup_ratio=warmup_ratio,
+            group_by_length=group_by_length,
+            lr_scheduler_type=lr_scheduler_type,
+            report_to="tensorboard"
+        )
+
+        # TRL calls get_peft_model() automatically with peft_config
+        trainer = SFTTrainer(
+            model=self.model_to_tune,
+            train_dataset=self.tokenized_dataset,
+            peft_config=lora_config,
+            args=training_arguments,
+        )
+
+        # Train model
+        trainer.train()
+
+        # Save trained model
+        trainer.model.save_pretrained(f"{self.model_name}-constitution-peft")
+        
+    def finetune_and_merge_weights(self):
+        
+        self.__finetune_sft()
+        
+        base_model = AutoModelForCausalLM.from_pretrained(
+            self.model_name,
+            low_cpu_mem_usage=True,
+            return_dict=True,
+            torch_dtype=torch.float16,
+            device_map=device_map,
+        )
+
+        # Load fine-tuned model from the the previous step
+        model = PeftModel.from_pretrained(base_model, f"{self.model_name}-constitution-peft")
+        model = model.merge_and_unload()
+        model.save_pretrained(f"final-{self.model_name}-constitution-peft")
+
+        # Reload tokenizer to save it
+        tokenizer = AutoTokenizer.from_pretrained(self.model_name, trust_remote_code=True)
+        tokenizer.pad_token = tokenizer.eos_token
+        tokenizer.padding_side = "right"
+        tokenizer.save_pretrained(f"final-{self.model_name}-constitution-peft")
+
+
 # --------------- Quantized LoRA (QLoRA) Model Setup -----------------
-tokenizer = AutoTokenizer.from_pretrained(model_name)
-tokenizer.pad_token = tokenizer.eos_token
-tokenizer.padding_side = "right" # Fix weird overflow issue with fp16 training
+
+# This is not actually the fine-tuned model yet, just the base model loaded with quantization
+# and ready for PEFT fine-tuning with LoRA
 
 finetuned_model = AutoModelForCausalLM.from_pretrained(
-    model_name,
+    MODEL_NAME,
     quantization_config=bnb_config,
     device_map=device_map,
     torch_dtype=torch.float16,
@@ -104,6 +205,11 @@ dataset = Dataset.from_list(rows)
 
 # Tokenize the data
 def tokenize(batch):
+    
+    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
+    tokenizer.pad_token = tokenizer.eos_token
+    tokenizer.padding_side = "right" # Fix weird overflow issue with fp16 training
+
     combined = [p + "\n" + c for p, c in zip(batch["prompt"], batch["final_completion"])]
     tokenized = tokenizer(
         combined,
@@ -120,7 +226,9 @@ tokenized_dataset = dataset.map(tokenize, batched=True, remove_columns=dataset.c
 
 # --------------- Fine-Tuning -----------------
 
-output_dir="qwen-1.5b-constitution-checkpoints"
+# output_dir="qwen-1.5b-constitution-checkpoints"
+# output_dir=f"{MODEL_NAME}-constitution-checkpoints"
+
 num_train_epochs = 1
 
 # Enable fp16/bf16 training (set bf16 to True with an A100)
@@ -170,43 +278,49 @@ save_steps = 25
 # Log every X updates steps
 logging_steps = 25
 
-training_arguments = TrainingArguments(
-    output_dir=output_dir,
-    num_train_epochs=num_train_epochs,
-    per_device_train_batch_size=per_device_train_batch_size,
-    gradient_accumulation_steps=gradient_accumulation_steps,
-    optim=optim,
-    save_steps=save_steps,
-    logging_steps=logging_steps,
-    learning_rate=learning_rate,
-    weight_decay=weight_decay,
-    fp16=fp16,
-    bf16=bf16,
-    max_grad_norm=max_grad_norm,
-    max_steps=max_steps,
-    warmup_ratio=warmup_ratio,
-    group_by_length=group_by_length,
-    lr_scheduler_type=lr_scheduler_type,
-    report_to="tensorboard"
-)
+def finetune_sft():
+    
+    output_dir=f"{MODEL_NAME}-constitution-checkpoints"
 
-# TRL calls get_peft_model() automatically with peft_config
-trainer = SFTTrainer(
-    model=finetuned_model,
-    train_dataset=tokenized_dataset,
-    peft_config=lora_config,
-    args=training_arguments,
-)
+    training_arguments = TrainingArguments(
+        output_dir=output_dir,
+        num_train_epochs=num_train_epochs,
+        per_device_train_batch_size=per_device_train_batch_size,
+        gradient_accumulation_steps=gradient_accumulation_steps,
+        optim=optim,
+        save_steps=save_steps,
+        logging_steps=logging_steps,
+        learning_rate=learning_rate,
+        weight_decay=weight_decay,
+        fp16=fp16,
+        bf16=bf16,
+        max_grad_norm=max_grad_norm,
+        max_steps=max_steps,
+        warmup_ratio=warmup_ratio,
+        group_by_length=group_by_length,
+        lr_scheduler_type=lr_scheduler_type,
+        report_to="tensorboard"
+    )
 
-# Train model
-trainer.train()
+    # TRL calls get_peft_model() automatically with peft_config
+    trainer = SFTTrainer(
+        model=finetuned_model,
+        train_dataset=tokenized_dataset,
+        peft_config=lora_config,
+        args=training_arguments,
+    )
 
-# Save trained model
-trainer.model.save_pretrained("Qwen-1.5b-constitution-peft")
+    # Train model
+    trainer.train()
+
+    # Save trained model
+    trainer.model.save_pretrained(f"{MODEL_NAME}-constitution-peft")
+
+# finetune_sft()
 
 # --------------- Merging Weights from Base Model and Fine-tuned Model -----------------
 base_model = AutoModelForCausalLM.from_pretrained(
-    model_name,
+    MODEL_NAME,
     low_cpu_mem_usage=True,
     return_dict=True,
     torch_dtype=torch.float16,
@@ -214,12 +328,12 @@ base_model = AutoModelForCausalLM.from_pretrained(
 )
 
 # Load fine-tuned model from the the previous step
-model = PeftModel.from_pretrained(base_model, "Qwen-1.5b-constitution-peft")
+model = PeftModel.from_pretrained(base_model, f"{MODEL_NAME}-constitution-peft")
 model = model.merge_and_unload()
-model.save_pretrained("final-Qwen-1.5b-constitution-peft")
+model.save_pretrained(f"final-{MODEL_NAME}-constitution-peft")
 
 # Reload tokenizer to save it
-tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
+tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME, trust_remote_code=True)
 tokenizer.pad_token = tokenizer.eos_token
 tokenizer.padding_side = "right"
-tokenizer.save_pretrained("final-Qwen-1.5b-constitution-peft")
+tokenizer.save_pretrained("final-{MODEL_NAME}-constitution-peft")
