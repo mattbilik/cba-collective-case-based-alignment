@@ -27,36 +27,15 @@ REWARD_MODEL_BATCH_SIZE = 8
 # Disable wandb logging
 os.environ["WANDB_DISABLED"] = "true"
 
-
-def free_cuda_memory(obj_list=None):
-    """
-    Delete objects in obj_list (if provided), run GC and empty CUDA cache.
-    Useful after saving/training models to fully free VRAM.
-    """
+def free_cuda_memory():
 
     print('cuda_mem_allocated before:', torch.cuda.memory_allocated())
     print('cuda_mem_reserved before:', torch.cuda.memory_reserved())
 
-    if obj_list:
-        for o in obj_list:
-            try:
-                del o
-            except Exception:
-                pass
-    gc.collect()
     torch.cuda.empty_cache()
 
     print('cuda_mem_allocated after:', torch.cuda.memory_allocated())
     print('cuda_mem_reserved after:', torch.cuda.memory_reserved())
-
-    # Anything that's left
-    for obj in gc.get_objects():
-        try:
-            if torch.is_tensor(obj) or (hasattr(obj, 'data') and torch.is_tensor(obj.data)):
-                print(type(obj), obj.size(), obj.device)
-        except:
-            pass
-
 
 class SFTModel:
     # def __init__(self, model_name=BASE_MODEL, adapter_name=ADAPTER_MODEL, device="cpu"):
@@ -495,6 +474,9 @@ class RewardDataset:
             log_prob, chosen_response, rejected_response = self.__generate_log_probs(
                 prompt, principle, resp_1, resp_2)
             log_probs[prompt] = [log_prob, chosen_response, rejected_response]
+            
+        # Move SFT model back to CPU to free up GPU memory
+        self.SFT_model.to("cpu")
 
         self.__generate_dataset(log_probs)
 
@@ -543,6 +525,8 @@ class RewardModel:
         peft_config = LoraConfig(
             task_type=TaskType.SEQ_CLS,
             inference_mode=False,
+            
+            # Rank or the size of the matrices
             r=8,
             lora_alpha=32,
             lora_dropout=0.1,
@@ -555,6 +539,8 @@ class RewardModel:
             peft_config=peft_config,
         )
 
+        # Print out the memory we have available before training
+        
         trainer.train()
 
         trainer.model.save_pretrained(self.adapter_dir)
@@ -725,9 +711,11 @@ def grpo_sft_model_with_reward_model(model_name: str = BASE_MODEL, constitution_
             )
 
     sft_model = SFTModel(model_name=model_name)
-
+    
     dataset = RewardDataset(sft_model,
                             constitution_path=constitution_path, num_samples=1000)
+
+    free_cuda_memory()
 
     reward_model = RewardModel(sft_model, dataset)
     reward_model.train_reward_model()
