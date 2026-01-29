@@ -22,7 +22,13 @@ from preference_datasets import get_batch_iterator
 
 # SFT'd model
 BASE_MODEL = "Qwen/Qwen2-1.5B"
-REWARD_MODEL_BATCH_SIZE = 8
+
+# Final GRPO model name
+FINAL_MODEL_NAME = "grpo_model_constitution_FINAL"
+
+# Reward batch size
+# Smaller batch sizes use less VRAM but take longer to train
+REWARD_MODEL_BATCH_SIZE = 4
 
 # Disable wandb logging
 os.environ["WANDB_DISABLED"] = "true"
@@ -705,11 +711,10 @@ class GRPOTrainerRLAIF:
 
         merged_model = lora_model.merge_and_unload()
 
-        merged_model.save_pretrained("grpo_model_constitution_FINAL")
-        grpo_trainer.tokenizer.save_pretrained("grpo_model_constitution_FINAL")
+        merged_model.save_pretrained(FINAL_MODEL_NAME)
+        grpo_trainer.tokenizer.save_pretrained(FINAL_MODEL_NAME)
 
-
-def grpo_sft_model_with_reward_model(model_name: str = BASE_MODEL, constitution_path='constitution.json'):
+def grpo_sft_model_with_reward_model(model_name: str = BASE_MODEL, constitution_path='constitution.json') -> str:
 
     use_4bit = True
     bnb_4bit_compute_dtype = "float16"
@@ -739,7 +744,8 @@ def grpo_sft_model_with_reward_model(model_name: str = BASE_MODEL, constitution_
 
     # Train sft_model with GRPO and save
     grpo_trainer.train_and_save_model()
-
+    
+    return FINAL_MODEL_NAME
 
 if __name__ == '__main__':
     grpo_sft_model_with_reward_model()
