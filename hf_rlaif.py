@@ -2,7 +2,7 @@ import json
 import random
 import os
 import torch
-from peft import LoraConfig, TaskType, PeftModel
+from peft import LoraConfig, TaskType, PeftModel, prepare_model_for_kbit_training
 from transformers import AutoTokenizer, AutoModelForCausalLM, AutoModelForSequenceClassification
 from trl import RewardTrainer, RewardConfig, PPOTrainer, PPOConfig, GRPOTrainer, GRPOConfig
 from datasets import Dataset
@@ -87,136 +87,136 @@ class SFTModel:
     def move_to_cpu(self):
         self.model.to("cpu")
 
-class PPOTrainerRLAIF:
+# class PPOTrainerRLAIF:
 
-    # TODO: maybe switch over to GRPO ?
-    # def __init__(self, reward_model, dataset: Dataset, model_name, device="cpu", model_to_PPO, adapter_model=ADAPTER_MODEL):
-    # def __init__(self, reward_model, model_to_PPO: SFTModel, adapter_model=ADAPTER_MODEL):
-    def __init__(self, reward_model_name, model_to_PPO: SFTModel, bf16=False):
-        """
-        reward_model_name: reward model name/path
-        dataset: Dataset object with prompts to train on
-        model_name: name of the base model to fine-tune with PPO
-        device: device to run on
-        """
+#     # TODO: maybe switch over to GRPO ?
+#     # def __init__(self, reward_model, dataset: Dataset, model_name, device="cpu", model_to_PPO, adapter_model=ADAPTER_MODEL):
+#     # def __init__(self, reward_model, model_to_PPO: SFTModel, adapter_model=ADAPTER_MODEL):
+#     def __init__(self, reward_model_name, model_to_PPO: SFTModel, bf16=False):
+#         """
+#         reward_model_name: reward model name/path
+#         dataset: Dataset object with prompts to train on
+#         model_name: name of the base model to fine-tune with PPO
+#         device: device to run on
+#         """
 
-        dataset = model_to_PPO.dataset
-        model_name = model_to_PPO.model_name
+#         dataset = model_to_PPO.dataset
+#         model_name = model_to_PPO.model_name
 
-        # Determine the device map configuration
-        if torch.cuda.is_available():
-            # Force the model to load entirely on GPU 0
-            device_map = {"": 0}
-            print(f"Explicitly setting device_map to CUDA:0: {device_map}")
-        else:
-            # Fallback to CPU if no CUDA device is available
-            device_map = "cpu"
-            print(f"Explicitly setting device_map to CPU: {device_map}")
+#         # Determine the device map configuration
+#         if torch.cuda.is_available():
+#             # Force the model to load entirely on GPU 0
+#             device_map = {"": 0}
+#             print(f"Explicitly setting device_map to CUDA:0: {device_map}")
+#         else:
+#             # Fallback to CPU if no CUDA device is available
+#             device_map = "cpu"
+#             print(f"Explicitly setting device_map to CPU: {device_map}")
 
-        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
-        self.tokenizer.pad_token = self.tokenizer.eos_token
+#         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+#         self.tokenizer.pad_token = self.tokenizer.eos_token
 
-        print("\nTraining SFT'd model with PPO and our reward model:\n")
+#         print("\nTraining SFT'd model with PPO and our reward model:\n")
 
-        # https://newfacade.github.io/notes-on-reinforcement-learning/17-ppo-trl.html
-        # https://huggingface.co/docs/trl/main/en/ppo_trainer#trl.PPOConfig
+#         # https://newfacade.github.io/notes-on-reinforcement-learning/17-ppo-trl.html
+#         # https://huggingface.co/docs/trl/main/en/ppo_trainer#trl.PPOConfig
 
-        # The automodel with value head is required for PPO training (gives us a value function to compute advantages)
-        # Maybe we actually don't want the value head here? It returns an error
+#         # The automodel with value head is required for PPO training (gives us a value function to compute advantages)
+#         # Maybe we actually don't want the value head here? It returns an error
 
-        sft_model = AutoModelForCausalLM.from_pretrained(
-            model_name,
-            device_map=device_map
-        )
+#         sft_model = AutoModelForCausalLM.from_pretrained(
+#             model_name,
+#             device_map=device_map
+#         )
 
-        # Copy of the policy model we're fine-tuning
-        reference_model = AutoModelForCausalLM.from_pretrained(
-            model_name,
-            device_map=device_map
-        )
+#         # Copy of the policy model we're fine-tuning
+#         reference_model = AutoModelForCausalLM.from_pretrained(
+#             model_name,
+#             device_map=device_map
+#         )
 
-        # Another copy of the policy model we're fine-tuning
-        value_model = AutoModelForCausalLM.from_pretrained(
-            model_name,
-            device_map=device_map
-        )
+#         # Another copy of the policy model we're fine-tuning
+#         value_model = AutoModelForCausalLM.from_pretrained(
+#             model_name,
+#             device_map=device_map
+#         )
 
-        # ! Reward model is trained with PEFT, so need to load base and then PEFT on top
-        base_reward_model = AutoModelForCausalLM.from_pretrained(
-            model_name,
-            device_map=device_map
-        )
-        reward_model = PeftModel.from_pretrained(
-            base_reward_model, reward_model_name)
+#         # ! Reward model is trained with PEFT, so need to load base and then PEFT on top
+#         base_reward_model = AutoModelForCausalLM.from_pretrained(
+#             model_name,
+#             device_map=device_map
+#         )
+#         reward_model = PeftModel.from_pretrained(
+#             base_reward_model, reward_model_name)
 
-        # Turn off bf16 for mac compatability
-        # PPO is being moved to the experimental library
+#         # Turn off bf16 for mac compatability
+#         # PPO is being moved to the experimental library
 
-        try:
-            config = PPOConfig(
-                # TODO: Why are we specifying the reward model twice?
-                reward_model_path=reward_model_name,
-                bf16=bf16,  # turn off bf16 for Mac Intel compatability
-            )
-            print("Successfully created PPO config")
-        except Exception as e:
-            print("Error creating PPOConfig, likely MacOS related:", e)
+#         try:
+#             config = PPOConfig(
+#                 # TODO: Why are we specifying the reward model twice?
+#                 reward_model_path=reward_model_name,
+#                 bf16=bf16,  # turn off bf16 for Mac Intel compatability
+#             )
+#             print("Successfully created PPO config")
+#         except Exception as e:
+#             print("Error creating PPOConfig, likely MacOS related:", e)
 
-        try:
-            self.ppo_trainer = PPOTrainer(
-                # The model attribute is used to specify the policy model
-                model=sft_model,
-                args=config,
+#         try:
+#             self.ppo_trainer = PPOTrainer(
+#                 # The model attribute is used to specify the policy model
+#                 model=sft_model,
+#                 args=config,
 
-                # We also need to specify the reward model, the reference model (copy of the policy model),
-                # and the value model (used to predict value of next state)
-                reward_model=reward_model,
-                ref_model=reference_model,
-                value_model=value_model,
-                train_dataset=dataset,
-                processing_class=None,
-            )
-        except Exception as e:
-            print("Error initializing PPOTrainer:", e)
+#                 # We also need to specify the reward model, the reference model (copy of the policy model),
+#                 # and the value model (used to predict value of next state)
+#                 reward_model=reward_model,
+#                 ref_model=reference_model,
+#                 value_model=value_model,
+#                 train_dataset=dataset,
+#                 processing_class=None,
+#             )
+#         except Exception as e:
+#             print("Error initializing PPOTrainer:", e)
 
-    def __train_ppo(self, generation_kwargs={
-        "min_length": -1,
-        "top_k": 0.0,
-        "top_p": 1.0,
-        "do_sample": True,
-    }):
+#     def __train_ppo(self, generation_kwargs={
+#         "min_length": -1,
+#         "top_k": 0.0,
+#         "top_p": 1.0,
+#         "do_sample": True,
+#     }):
 
-        generation_kwargs = {
-            **generation_kwargs,
-            "pad_token_id": self.tokenizer.eos_token_id
-        }
+#         generation_kwargs = {
+#             **generation_kwargs,
+#             "pad_token_id": self.tokenizer.eos_token_id
+#         }
 
-        epochs = 10
-        for epoch in tqdm(range(epochs), "epoch: "):
-            for batch in tqdm(self.ppo_trainer.dataloader):
-                query_tensors = batch["input_ids"]
+#         epochs = 10
+#         for epoch in tqdm(range(epochs), "epoch: "):
+#             for batch in tqdm(self.ppo_trainer.dataloader):
+#                 query_tensors = batch["input_ids"]
 
-                # Get response from SFTModel
-                response_tensors = self.ppo_trainer.generate(
-                    query_tensors, **generation_kwargs)
-                batch["response"] = [self.tokenizer.decode(
-                    r.squeeze()) for r in response_tensors]
+#                 # Get response from SFTModel
+#                 response_tensors = self.ppo_trainer.generate(
+#                     query_tensors, **generation_kwargs)
+#                 batch["response"] = [self.tokenizer.decode(
+#                     r.squeeze()) for r in response_tensors]
 
-                # Compute reward score
-                texts = [q + r for q,
-                         r in zip(batch["query"], batch["response"])]
-                pipe_outputs = self.reward_model(texts)
-                rewards = [torch.tensor(output[1]["score"])
-                           for output in pipe_outputs]
+#                 # Compute reward score
+#                 texts = [q + r for q,
+#                          r in zip(batch["query"], batch["response"])]
+#                 pipe_outputs = self.reward_model(texts)
+#                 rewards = [torch.tensor(output[1]["score"])
+#                            for output in pipe_outputs]
 
-                # Run PPO step
-                stats = self.ppo_trainer.step(
-                    query_tensors, response_tensors, rewards)
-                self.ppo_trainer.log_stats(stats, batch, rewards)
+#                 # Run PPO step
+#                 stats = self.ppo_trainer.step(
+#                     query_tensors, response_tensors, rewards)
+#                 self.ppo_trainer.log_stats(stats, batch, rewards)
 
-    def train_and_save_model(self):
-        self.__train_ppo()
-        self.ppo_trainer.save_model("ppo_model_constitution")
+#     def train_and_save_model(self):
+#         self.__train_ppo()
+#         self.ppo_trainer.save_model("ppo_model_constitution")
 
 
 class RewardDataset:
@@ -538,6 +538,9 @@ class RewardModel:
             per_device_train_batch_size=REWARD_MODEL_BATCH_SIZE,
             learning_rate=2e-5,
             logging_steps=10,
+            
+            # This breaks the trainer
+            # fp16=True,
         )
         
         trainer = RewardTrainer(
@@ -588,12 +591,18 @@ class GRPOTrainerRLAIF:
 
         self.dataset = reward_model.get_dataset()
 
+        # Maybe try not loading sft_model in fp16
         self.sft_model = AutoModelForCausalLM.from_pretrained(
             model_name,
             device_map=device_map,
             quantization_config=config.bnb_config,
-            max_memory=config.max_memory
+            max_memory=config.max_memory,
+            dtype=config.dtype
         )
+        
+        # Trying this to resolve dtype mismatch issues
+        # NOTE: This seems to move the model to 32-bit precision
+        self.sft_model = prepare_model_for_kbit_training(self.sft_model)
 
         self.tokenizer = AutoTokenizer.from_pretrained(
             model_name,
@@ -609,7 +618,8 @@ class GRPOTrainerRLAIF:
         self.reward_model = AutoModelForSequenceClassification.from_pretrained(
             reward_model_name,
             device_map=device_map,
-            max_memory=config.max_memory
+            max_memory=config.max_memory,
+            dtype=config.dtype
         )
 
         self.reward_tokenizer = AutoTokenizer.from_pretrained(
@@ -682,6 +692,8 @@ class GRPOTrainerRLAIF:
             per_device_train_batch_size=1,
             gradient_accumulation_steps=8,
             num_train_epochs=1,
+            fp16=True,
+            bf16=False
         )
 
         grpo_trainer = GRPOTrainer(
@@ -689,8 +701,16 @@ class GRPOTrainerRLAIF:
             args=grpo_config,
             train_dataset=self.dataset,
             reward_funcs=[self.reward_fn],
-            peft_config=peft_config
+            peft_config=peft_config,
         )
+
+        # Need to fix dtype issues here
+
+        print(f"Model dtype: {self.sft_model.dtype}")
+        print(f"LM Head weight dtype: {self.sft_model.lm_head.weight.dtype}")
+        print(self.sft_model.model.norm.weight)
+        
+        assert self.sft_model.dtype == self.sft_model.lm_head.weight.dtype, "Model and LM head dtypes do not match"
 
         grpo_trainer.train()
         grpo_trainer.save_model("grpo_model_constitution_adapter")

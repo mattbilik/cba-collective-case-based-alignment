@@ -13,6 +13,8 @@ BASE_MODEL_NAME = "Qwen/Qwen2-1.5B"
 # Maybe want to specify batch size & also lora config among all models here at some point
 
 # ---- QUANTIZATION CONFIGURATION ----
+# NOTE: Not able to use bf16 because we're using NVIDIA 2080 GPUs
+
 # Activate 4-bit precision base model loading
 use_4bit = True
 # Compute dtype for 4-bit base models
@@ -50,9 +52,12 @@ class Config:
     sft_on_revisions = False
     
     # CAI uses 182,831
-    constitutionally_generated_harmlessness_comparisons = 10
+    constitutionally_generated_harmlessness_comparisons = 1
     max_memory = max_memory
     dtype = compute_dtype
+
+# ---- MAIN PIPELINE ----
+# GRPO: ... otherwise "expected mat1 and mat2 to have the same dtype"
 
 if __name__ == "__main__":
     
