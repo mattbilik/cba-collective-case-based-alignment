@@ -11,3 +11,4 @@ openai
 dotenv
 sentence-transformers
 archieml
+deepeval

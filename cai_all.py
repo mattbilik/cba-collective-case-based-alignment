@@ -32,15 +32,36 @@ bnb_config = BitsAndBytesConfig(
     bnb_4bit_use_double_quant=use_nested_quant,
 )
 
+# ---- GPU CONFIGURATION ----
+
+num_gpus = torch.cuda.device_count()
+print(f"Detected {num_gpus} GPUs: {[torch.cuda.get_device_name(i) for i in range(num_gpus)]}")
+
+def build_max_memory(per_gpu_gb=10, cpu_gb=16):
+    num_gpus = torch.cuda.device_count()
+    max_memory = {i: f"{per_gpu_gb}GiB" for i in range(num_gpus)}
+    max_memory["cpu"] = f"{cpu_gb}GiB"
+    return max_memory
+
+max_memory = build_max_memory(per_gpu_gb=10, cpu_gb=16)
+
 class Config:
     bnb_config = bnb_config
     sft_on_revisions = False
+    
+    # CAI uses 182,831
+    constitutionally_generated_harmlessness_comparisons = 10
+    max_memory = max_memory
+    dtype = compute_dtype
 
 if __name__ == "__main__":
     
     # Revisions and SFT only for critique + revise, we're not critiquing for CCAI
     
     if Config.sft_on_revisions:
+        
+        # Bai et al. "We found that critiqued revisions achieved better 
+        # harmlessness scores for small models, but made no noticeable different for large models."
         create_revisions(model_name=BASE_MODEL_NAME, constitution_path='constitution_from_doc.json')
         finetune_and_merge_weights(Config, model_name=BASE_MODEL_NAME)
     

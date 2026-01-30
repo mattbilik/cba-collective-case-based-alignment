@@ -25,7 +25,7 @@ FINAL_MODEL_NAME = "grpo_model_constitution_FINAL"
 
 # Reward batch size
 # Smaller batch sizes use less VRAM but take longer to train
-REWARD_MODEL_BATCH_SIZE = 4
+REWARD_MODEL_BATCH_SIZE = 2
 
 # Disable wandb logging
 os.environ["WANDB_DISABLED"] = "true"
@@ -42,14 +42,16 @@ def free_cuda_memory():
 
 class SFTModel:
     # def __init__(self, model_name=BASE_MODEL, adapter_name=ADAPTER_MODEL, device="cpu"):
-    def __init__(self, model_name=BASE_MODEL, device_map="auto"):
+    def __init__(self, config, model_name=BASE_MODEL, device_map="auto"):
 
         # Actually do not want to use the adapter, want to use our new finetuned model from train_peft.py
 
         print("setting model,", model_name)
         self.model = AutoModelForCausalLM.from_pretrained(
             model_name,
-            device_map=device_map
+            device_map=device_map,
+            max_memory=config.max_memory,
+            dtype=config.dtype,
         )
 
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
@@ -62,11 +64,8 @@ class SFTModel:
                           system_prompt="You are a helpful assistant. "):
 
         inputs = self.tokenizer(system_prompt + prompt, return_tensors="pt")
-
-        # Move to first layer device (for multi-GPU setups)
-        device = next(self.model.parameters()).device
-        inputs.to(device)
-
+        inputs = {k: v.to(self.model.device) for k, v in inputs.items()}
+        
         # Setting do_sample to be true so we get more diverse outputs
         outputs = self.model.generate(
             **inputs, 
@@ -84,6 +83,9 @@ class SFTModel:
 
     def get_model_name(self):
         return self.model_name
+    
+    def move_to_cpu(self):
+        self.model.to("cpu")
 
 class PPOTrainerRLAIF:
 
@@ -479,7 +481,7 @@ class RewardDataset:
             log_probs[prompt] = [log_prob, chosen_response, rejected_response]
             
         # Move SFT model back to CPU to free up GPU memory
-        self.SFT_model.to("cpu")
+        self.SFT_model.move_to_cpu()
 
         self.__generate_dataset(log_probs)
 
@@ -504,34 +506,22 @@ class RewardModel:
 
     def train_reward_model(self):
 
-        # Determine the device map configuration
-        if torch.cuda.is_available():
-            device_map = "auto"
-            print(f"Multi-GPU support with auto: {device_map}")
-        else:
-            # Fallback to CPU if no CUDA device is available
-            device_map = "cpu"
-            print(f"Explicitly setting device_map to CPU: {device_map}")
+        assert torch.cuda.is_available(), "need CUDA"
+        
+        device_map = "auto"
 
         # Also want to quantize the reward model
-
+        
+        # TODO: move this out of the function and into init
         reward_model = AutoModelForSequenceClassification.from_pretrained(
             self.model_name,
             quantization_config=self.config.bnb_config,
             device_map=device_map,
+            max_memory=self.config.max_memory
         )
 
         # Using low-rank adaptation for reward model fine-tuning
         
-        training_args = RewardConfig(
-            output_dir=self.checkpoint_dir,
-            num_train_epochs=3,
-            per_device_train_batch_size=4,
-            learning_rate=2e-5,
-            logging_steps=10,
-            fp16=True
-        )
-
         peft_config = LoraConfig(
             task_type=TaskType.SEQ_CLS,
             inference_mode=False,
@@ -542,6 +532,14 @@ class RewardModel:
             lora_dropout=0.1,
         )
 
+        training_args = RewardConfig(
+            output_dir=self.checkpoint_dir,
+            num_train_epochs=3,
+            per_device_train_batch_size=REWARD_MODEL_BATCH_SIZE,
+            learning_rate=2e-5,
+            logging_steps=10,
+        )
+        
         trainer = RewardTrainer(
             model=reward_model,
             args=training_args,
@@ -583,13 +581,10 @@ class GRPOTrainerRLAIF:
         reward_model_name = reward_model.get_reward_model_name()
 
         # Determine the device map configuration
-        # if torch.cuda.is_available():
+        
+        assert torch.cuda.is_available(), "need CUDA"
+        
         device_map = "auto"
-        print(f"Need multi-GPU support: {device_map}")
-        # else:
-        #     # Fallback to CPU if no CUDA device is available
-        #     device_map = "cpu"
-        #     print(f"Explicitly setting device_map to CPU: {device_map}")
 
         self.dataset = reward_model.get_dataset()
 
@@ -597,6 +592,7 @@ class GRPOTrainerRLAIF:
             model_name,
             device_map=device_map,
             quantization_config=config.bnb_config,
+            max_memory=config.max_memory
         )
 
         self.tokenizer = AutoTokenizer.from_pretrained(
@@ -612,7 +608,8 @@ class GRPOTrainerRLAIF:
         # ALREADY QUANTIZED
         self.reward_model = AutoModelForSequenceClassification.from_pretrained(
             reward_model_name,
-            device_map=device_map
+            device_map=device_map,
+            max_memory=config.max_memory
         )
 
         self.reward_tokenizer = AutoTokenizer.from_pretrained(
@@ -673,7 +670,7 @@ class GRPOTrainerRLAIF:
     def train_and_save_model(self):
 
         peft_config = LoraConfig(
-            task_type=TaskType.SEQ_CLS,
+            task_type=TaskType.CAUSAL_LM,
             inference_mode=False,
             r=8,
             lora_alpha=32,
@@ -715,10 +712,11 @@ def grpo_sft_model_with_reward_model(config, model_name: str = BASE_MODEL, const
     4. GRPO SFT model with reward model
     """
     
-    sft_model = SFTModel(model_name=model_name)
+    sft_model = SFTModel(config, model_name=model_name)
     
     dataset = RewardDataset(sft_model,
-                            constitution_path=constitution_path, num_samples=1000)
+                            constitution_path=constitution_path, 
+                            num_samples=config.constitutionally_generated_harmlessness_comparisons)
 
     free_cuda_memory()
 
@@ -728,7 +726,7 @@ def grpo_sft_model_with_reward_model(config, model_name: str = BASE_MODEL, const
     free_cuda_memory()
 
     grpo_trainer = GRPOTrainerRLAIF(
-        reward_model, sft_model)
+        reward_model, sft_model, config)
 
     # Train sft_model with GRPO and save
     grpo_trainer.train_and_save_model()
