@@ -1,16 +1,13 @@
 import json
 import random
-import math
 import os
 import torch
-import gc
 from peft import LoraConfig, TaskType, PeftModel
 from transformers import AutoTokenizer, AutoModelForCausalLM, AutoModelForSequenceClassification
 from trl import RewardTrainer, RewardConfig, PPOTrainer, PPOConfig, GRPOTrainer, GRPOConfig
 from datasets import Dataset
 from tqdm import tqdm
 from preference_datasets import get_batch_iterator
-# from ai_completions import get_all_turns_from_hh_anthropic, _get_prompt_from_hh_anthropic
 
 """
 1. Use SFT'd model to generate pairs for RLAIF.
@@ -491,11 +488,15 @@ class RewardDataset:
 
 
 class RewardModel:
-    def __init__(self, sft_model: SFTModel, reward_data: RewardDataset):
+    def __init__(self, sft_model: SFTModel, reward_data: RewardDataset, config):
 
         # TODO: Probably do something with device here
         self.dataset = reward_data.get_dataset()
+        
+        # Only using the SFT model to get the model name
         self.model_name = sft_model.get_model_name()
+        
+        self.config = config
 
         self.checkpoint_dir = f"./reward-model-constitution-{self.model_name}-checkpoints"
         self.adapter_dir = f"./reward-model-constitution-{self.model_name}-adapters"
@@ -512,17 +513,20 @@ class RewardModel:
             device_map = "cpu"
             print(f"Explicitly setting device_map to CPU: {device_map}")
 
+        # Also want to quantize the reward model
+
         reward_model = AutoModelForSequenceClassification.from_pretrained(
             self.model_name,
+            quantization_config=self.config.bnb_config,
             device_map=device_map,
         )
 
-        # tokenizer = AutoTokenizer.from_pretrained(self.model_name)
-
+        # Using low-rank adaptation for reward model fine-tuning
+        
         training_args = RewardConfig(
             output_dir=self.checkpoint_dir,
             num_train_epochs=3,
-            per_device_train_batch_size=2,
+            per_device_train_batch_size=4,
             learning_rate=2e-5,
             logging_steps=10,
             fp16=True
@@ -532,7 +536,7 @@ class RewardModel:
             task_type=TaskType.SEQ_CLS,
             inference_mode=False,
             
-            # Rank or the size of the matrices
+            # Rank or the size of the matrices added to our model
             r=8,
             lora_alpha=32,
             lora_dropout=0.1,
@@ -547,7 +551,9 @@ class RewardModel:
 
         # Print out the memory we have available before training
         
-        trainer.train()
+        result = trainer.train()
+        
+        print("\nTraining GPU memory & other metrics:\n", result)
 
         trainer.model.save_pretrained(self.adapter_dir)
         # trainer.tokenizer.save_pretrained(self.output_dir)
@@ -560,6 +566,7 @@ class RewardModel:
 
         merged_model.save_pretrained(self.output_dir)
         trainer.tokenizer.save_pretrained(self.output_dir)
+        
 
     def get_reward_model_name(self):
         return self.output_dir
@@ -567,12 +574,9 @@ class RewardModel:
     def get_dataset(self):
         return self.dataset
 
-    def get_sft_model_with_reward_data(self):
-        return self.SFT_model
-
 
 class GRPOTrainerRLAIF:
-    def __init__(self, reward_model: RewardModel, model_to_GRPO: SFTModel):
+    def __init__(self, reward_model: RewardModel, model_to_GRPO: SFTModel, config):
 
         # This returns the path / name of the model that we are fine-tuning with GRPO
         model_name = model_to_GRPO.get_model_name()
@@ -591,7 +595,8 @@ class GRPOTrainerRLAIF:
 
         self.sft_model = AutoModelForCausalLM.from_pretrained(
             model_name,
-            device_map={"": 2}
+            device_map=device_map,
+            quantization_config=config.bnb_config,
         )
 
         self.tokenizer = AutoTokenizer.from_pretrained(
@@ -603,9 +608,11 @@ class GRPOTrainerRLAIF:
 
         # Base reward model is the same as the model we're fine-tuning
         # The reward model is actually already saved with the PEFT layers
+        
+        # ALREADY QUANTIZED
         self.reward_model = AutoModelForSequenceClassification.from_pretrained(
             reward_model_name,
-            device_map={"": 1}
+            device_map=device_map
         )
 
         self.reward_tokenizer = AutoTokenizer.from_pretrained(
@@ -700,21 +707,14 @@ class GRPOTrainerRLAIF:
         merged_model.save_pretrained(FINAL_MODEL_NAME)
         grpo_trainer.tokenizer.save_pretrained(FINAL_MODEL_NAME)
 
-def grpo_sft_model_with_reward_model(model_name: str = BASE_MODEL, constitution_path='constitution.json') -> str:
-
-    use_4bit = True
-    bnb_4bit_compute_dtype = "float16"
-    compute_dtype = getattr(torch, bnb_4bit_compute_dtype)
+def grpo_sft_model_with_reward_model(config, model_name: str = BASE_MODEL, constitution_path='constitution.json') -> str:
+    """
+    1. Create SFT model
+    2. Create reward dataset with SFT model
+    3. Train reward model with reward dataset
+    4. GRPO SFT model with reward model
+    """
     
-    # Want to use float16 or fp16 because lower precision uses less memory
-
-    if compute_dtype == torch.float16 and use_4bit:
-        major, _ = torch.cuda.get_device_capability()
-        if major < 8:
-            print(
-                f"Warning: Using float16 on a GPU with compute capability {major} may lead to instability. Consider using bfloat16 instead."
-            )
-
     sft_model = SFTModel(model_name=model_name)
     
     dataset = RewardDataset(sft_model,
@@ -722,7 +722,7 @@ def grpo_sft_model_with_reward_model(model_name: str = BASE_MODEL, constitution_
 
     free_cuda_memory()
 
-    reward_model = RewardModel(sft_model, dataset)
+    reward_model = RewardModel(sft_model, dataset, config)
     reward_model.train_reward_model()
 
     free_cuda_memory()

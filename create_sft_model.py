@@ -31,25 +31,6 @@ MODEL_NAME = "Qwen/Qwen2-1.5B"
 device_map={'' : torch.cuda.current_device()}
 print(f"Using CUDA device: {device_map}")
 
-# Activate 4-bit precision base model loading
-use_4bit = True
-# Compute dtype for 4-bit base models
-bnb_4bit_compute_dtype = "float16"
-# Quantization type (fp4 or nf4)
-bnb_4bit_quant_type = "nf4"
-# Activate nested quantization for 4-bit base models (double quantization)
-use_nested_quant = False
-
-compute_dtype = getattr(torch, bnb_4bit_compute_dtype)
-
-# Fine-tuning on self-revised responses from HH dataset with our constitution
-bnb_config = BitsAndBytesConfig(
-    load_in_4bit=use_4bit,
-    bnb_4bit_quant_type=bnb_4bit_quant_type,
-    bnb_4bit_compute_dtype=compute_dtype,
-    bnb_4bit_use_double_quant=use_nested_quant,
-)
-
 # --------------- Quantized LoRA (QLoRA) Model Setup -----------------
 # LoRA setup for parameter-efficient fine-tuning
 
@@ -142,12 +123,12 @@ dataset = Dataset.from_list(rows)
 
 # --------------- Fine-Tuning with PEFT -----------------
 class Finetuner:
-    def __init__(self, model_name):
+    def __init__(self, model_name, config):
         self.model_name = model_name
         
         model_to_tune = AutoModelForCausalLM.from_pretrained(
             self.model_name,
-            quantization_config=bnb_config,
+            quantization_config=config.bnb_config,
             device_map=device_map,
             torch_dtype=torch.float16,
         )
@@ -241,8 +222,8 @@ class Finetuner:
         tokenizer.save_pretrained(f"final-{self.model_name}-constitution-peft")
 
 
-def finetune_and_merge_weights(model_name=MODEL_NAME):
-    finetuner = Finetuner(model_name)
+def finetune_and_merge_weights(config, model_name=MODEL_NAME):
+    finetuner = Finetuner(model_name, config)
     finetuner.finetune_and_merge_weights()
 
 if __name__ == "__main__":
