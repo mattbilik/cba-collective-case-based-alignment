@@ -7,6 +7,9 @@ from tests.deepeval_tests import test_deepeval_benchmarks
 # Specify model information
 BASE_MODEL_NAME = "Qwen/Qwen2-1.5B"
 
+# Model hyperparameters
+# Maybe want to specify batch size among all models here at some point
+
 if __name__ == "__main__":
     
     # Revisions and SFT only for critique + revise, we're not critiquing for CCAI
