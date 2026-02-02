@@ -62,7 +62,6 @@ class Config:
 if __name__ == "__main__":
     
     # Revisions and SFT only for critique + revise, we're not critiquing for CCAI
-    
     if Config.sft_on_revisions:
         
         # Bai et al. "We found that critiqued revisions achieved better 
@@ -76,4 +75,4 @@ if __name__ == "__main__":
     # The reward model's base model is the same as the SFT or non-SFT'd model that we're fine-tuning
     final_model_name = grpo_sft_model_with_reward_model(Config, model_name=sft_model_name, constitution_path='constitution_from_doc.json')
     
-    test_deepeval_benchmarks(final_model_name)
+    test_deepeval_benchmarks(final_model_name, BASE_MODEL_NAME)

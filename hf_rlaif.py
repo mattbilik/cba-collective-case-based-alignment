@@ -7,6 +7,7 @@ from transformers import AutoTokenizer, AutoModelForCausalLM, AutoModelForSequen
 from trl import RewardTrainer, RewardConfig, PPOTrainer, PPOConfig, GRPOTrainer, GRPOConfig
 from datasets import Dataset
 from tqdm import tqdm
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from preference_datasets import get_batch_iterator
 
 """
@@ -42,22 +43,23 @@ def free_cuda_memory():
 
 class SFTModel:
     # def __init__(self, model_name=BASE_MODEL, adapter_name=ADAPTER_MODEL, device="cpu"):
-    def __init__(self, config, model_name=BASE_MODEL, device_map="auto"):
+    def __init__(self, config, model_name=BASE_MODEL, device_index=1):
 
         # Actually do not want to use the adapter, want to use our new finetuned model from train_peft.py
 
         print("setting model,", model_name)
         self.model = AutoModelForCausalLM.from_pretrained(
             model_name,
-            device_map=device_map,
+            # Want to be moving SFT model to specific GPU for concurrent generation
+            device_map={"": device_index},
             max_memory=config.max_memory,
             dtype=config.dtype,
+            quantization_config=config.bnb_config
         )
 
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
-        self.device_map = device_map
         self.model_name = model_name
-
+    
     def generate_response(self, prompt,
                           max_new_tokens=100,
                           temperature=1.2,
@@ -246,6 +248,44 @@ class RewardDataset:
 
     def __get_ai_output_from_sft_model(self, prompt):
         return self.SFT_model.generate_response(prompt, temperature=1.5)
+    
+    
+    def __run_on_gpu(gpu_id, prompts):
+        sft_model = SFTModel(model_name=BASE_MODEL, device_index=gpu_id)
+        
+        responses = []
+        for prompt in prompts:
+            response = sft_model.generate_response(prompt, temperature=1.5)
+            responses.append(response)
+        
+        return responses
+    
+    # TODO: finish this function
+    def __concurrently_generate_response_pairs(self, prompts):
+        # Split prompts into batches for each GPU
+        num_gpus = torch.cuda.device_count()
+        prompt_batches = [[] for _ in range(num_gpus)]
+        
+
+        for i, prompt in enumerate(prompts):
+            prompt_batches[i % num_gpus].append(prompt)
+            
+        responses = [None] * len(prompts)
+        
+        with ProcessPoolExecutor(max_workers=num_gpus) as executor:
+            futures = {executor.submit(self.__run_on_gpu, gpu_id, batch): (gpu_id, batch)
+                       for gpu_id, batch in enumerate(prompt_batches)}
+            for future in tqdm(as_completed(futures), total=len(futures), desc="Generating responses"):
+                gpu_id, batch = futures[future]
+                try:
+                    batch_responses = future.result()
+                    for prompt, response in zip(batch, batch_responses):
+                        index = prompts.index(prompt)
+                        responses[index] = response
+                except Exception as e:
+                    print(f"Error generating responses on GPU {gpu_id}: {e}")
+                    
+        return responses
 
     def __generate_response_pairs(self, prompt):
 
@@ -517,7 +557,8 @@ class RewardModel:
             self.model_name,
             quantization_config=self.config.bnb_config,
             device_map=device_map,
-            max_memory=self.config.max_memory
+            max_memory=self.config.max_memory,
+            dtype=self.config.dtype
         )
 
         # Using low-rank adaptation for reward model fine-tuning
