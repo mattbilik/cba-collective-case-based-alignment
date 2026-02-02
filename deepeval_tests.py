@@ -79,16 +79,16 @@ class LoggingModel:
     def __init__(self, model):
         self.model = model
 
-def __call__(self, prompt: str) -> str:
-    print("\n================ PROMPT ================\n")
-    print(prompt)
+    def __call__(self, prompt: str) -> str:
+        print("\n================ PROMPT ================\n")
+        print(prompt)
 
-    output = self.model(prompt)
+        output = self.model(prompt)
 
-    print("\n================ RAW OUTPUT ================\n")
-    print(output)
+        print("\n================ RAW OUTPUT ================\n")
+        print(output)
 
-    return output       
+        return output       
 
 
 def test_deepeval_benchmarks(model_name, base_model_name):
