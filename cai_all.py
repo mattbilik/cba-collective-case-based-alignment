@@ -36,6 +36,8 @@ bnb_config = BitsAndBytesConfig(
 
 # ---- GPU CONFIGURATION ----
 
+assert torch.cuda.is_available(), "need CUDA"
+
 num_gpus = torch.cuda.device_count()
 print(f"Detected {num_gpus} GPUs: {[torch.cuda.get_device_name(i) for i in range(num_gpus)]}")
 
@@ -48,31 +50,70 @@ def build_max_memory(per_gpu_gb=10, cpu_gb=16):
 max_memory = build_max_memory(per_gpu_gb=10, cpu_gb=16)
 
 class Config:
-    bnb_config = bnb_config
-    sft_on_revisions = False
-    
-    # CAI uses 182,831
-    constitutionally_generated_harmlessness_comparisons = 1
-    max_memory = max_memory
-    dtype = compute_dtype
+    def __init__(self):
+        self.bnb_config = bnb_config
+        self.sft_on_revisions = False
+        
+        # CAI uses 182,831
+        self.constitutionally_generated_harmlessness_comparisons = 1
+        self.max_memory = max_memory
+        self.dtype = compute_dtype
+        self.testing_mode = True
 
+class ModelConfigSmall(Config):
+    def __init__(self, model_name: str, 
+                 testing_mode: bool = False, 
+                 sft_on_revisions: bool = False, 
+                 constitution_path: str = 'constitution_from_doc.json'):
+        
+        super().__init__()
+        
+        self.constitutionally_generated_harmlessness_comparisons = 10
+        self.testing_mode = testing_mode
+        self.model_name = model_name
+        self.sft_on_revisions = sft_on_revisions
+        self.constitution_path=constitution_path
+        
+    def __str__(self):
+        print(f"\nModel name: {self.model_name}, number of harmlessness comps: {self.constitutionally_generated_harmlessness_comparisons}")
+    
 # ---- MAIN PIPELINE ----
 # GRPO: ... otherwise "expected mat1 and mat2 to have the same dtype"
 
 if __name__ == "__main__":
     
-    # Revisions and SFT only for critique + revise, we're not critiquing for CCAI
-    if Config.sft_on_revisions:
+    list_of_models_to_test = [ModelConfigSmall('Qwen/Qwen2-0.5B'), 
+                              ModelConfigSmall('Qwen/Qwen2-1.5B'), 
+                              ModelConfigSmall('Qwen/Qwen3-0.6B'), 
+                              ModelConfigSmall('Qwen/Qwen3-1.7B')]
+    
+    initial_list_of_models_to_test = [ModelConfigSmall('Qwen/Qwen2-1.5B', testing_mode=True), 
+                                      ModelConfigSmall('Qwen/Qwen2-1.5B'), 
+                                      ModelConfigSmall('Qwen/Qwen2-1.5B', sft_on_revisions=True)]
+    
+    for each_config in initial_list_of_models_to_test:
+    # for each_config in list_of_models_to_test:
+    
+        print("Starting training with configuration:", each_config)
+            
+        # Revisions and SFT only for critique + revise, we're not critiquing for CCAI
         
-        # Bai et al. "We found that critiqued revisions achieved better 
-        # harmlessness scores for small models, but made no noticeable different for large models."
-        create_revisions(model_name=BASE_MODEL_NAME, constitution_path='constitution_from_doc.json')
-        finetune_and_merge_weights(Config, model_name=BASE_MODEL_NAME)
-    
-    # TODO: Change this to the SFT model name if we do SFT
-    sft_model_name = BASE_MODEL_NAME
-    
-    # The reward model's base model is the same as the SFT or non-SFT'd model that we're fine-tuning
-    final_model_name = grpo_sft_model_with_reward_model(Config, model_name=sft_model_name, constitution_path='constitution_from_doc.json')
-    
-    test_deepeval_benchmarks(final_model_name, BASE_MODEL_NAME)
+        # TODO: Change this to the SFT model name if we do SFT
+        sft_model_name = BASE_MODEL_NAME
+        constitution_path = each_config.constitution_path
+
+        if each_config.sft_on_revisions:
+            
+            # Bai et al. "We found that critiqued revisions achieved better 
+            # harmlessness scores for small models, but made no noticeable different for large models."
+            create_revisions(model_name=BASE_MODEL_NAME, constitution_path=constitution_path)
+            sft_model_name = finetune_and_merge_weights(each_config, model_name=BASE_MODEL_NAME)
+        
+        # The reward model's base model is the same as the SFT or non-SFT'd model that we're fine-tuning
+        
+        if not each_config.testing_mode:
+            final_model_name = grpo_sft_model_with_reward_model(each_config, model_name=sft_model_name, constitution_path=constitution_path)
+        else:
+            final_model_name = "grpo_model_constitution_FINAL"
+        
+        test_deepeval_benchmarks(final_model_name, sft_model_name)

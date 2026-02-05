@@ -198,7 +198,7 @@ class Finetuner:
         # Save trained model
         trainer.model.save_pretrained(f"{self.model_name}-constitution-peft")
         
-    def finetune_and_merge_weights(self):
+    def finetune_and_merge_weights(self) -> str:
         
         self.__finetune_sft()
         
@@ -220,6 +220,11 @@ class Finetuner:
         tokenizer.pad_token = tokenizer.eos_token
         tokenizer.padding_side = "right"
         tokenizer.save_pretrained(f"final-{self.model_name}-constitution-peft")
+        
+        
+        model_path = f"final-{self.model_name}-constitution-peft"
+        
+        return model_path
 
 
 def finetune_and_merge_weights(config, model_name=MODEL_NAME):
