@@ -71,7 +71,7 @@ class ModelConfigSmall(Config):
         
         super().__init__()
         
-        self.constitutionally_generated_harmlessness_comparisons = 10
+        self.constitutionally_generated_harmlessness_comparisons = 1000
         self.testing_mode = testing_mode
         self.model_name = model_name
         self.sft_on_revisions = sft_on_revisions
@@ -102,6 +102,7 @@ if __name__ == "__main__":
     
     
     eval_scores = defaultdict(list)
+    output_file = "eval_scores.csv"
     
     baseline_mmlu = deepeval_baseline(BASE_MODEL_NAME)
     print(baseline_mmlu)

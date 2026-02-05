@@ -216,8 +216,9 @@ def create_revisions(model_name: str = 'Qwen/Qwen2-7B',
                      constitution_path: str = 'constitution.json'):
     args = {
         # This magic number is from the Anthropic CAI paper
-        "num_completions": 182831,
-        "ai_model": "Qwen7",
+        # "num_completions": 182831,
+        "num_completions": 100,
+        "ai_model": f"{model_name}",
         "base_output_dir": f"{os.getenv('PROJECT_CACHE', '~/.cache')}/hh_data",
         "cache_dir": os.getenv("PROJECT_CACHE", "~/.cache"),
         "data_fraction": 1.0,
@@ -250,9 +251,7 @@ def create_revisions(model_name: str = 'Qwen/Qwen2-7B',
     # tokenizer = AutoTokenizer.from_pretrained(
     #     'Qwen/Qwen2-1.5B')
 
-    tokenizer = AutoTokenizer.from_pretrained(
-        'Qwen/Qwen2-7B')
-
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
     tokenizer.pad_token_id = tokenizer.eos_token_id
 
     # Processing helpfulness, harmfulness dataset from Anthropic
