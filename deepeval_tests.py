@@ -9,6 +9,7 @@ from deepeval.models import DeepEvalBaseLLM
 
 from pydantic import BaseModel
 from lmformatenforcer import JsonSchemaParser
+import asyncio
 from lmformatenforcer.integrations.transformers import (
     build_transformers_prefix_allowed_tokens_fn,
 )
@@ -75,8 +76,8 @@ class CustomRLAIFModel(DeepEvalBaseLLM):
         # Return valid JSON object according to the schema DeepEval supplied
         return schema(**json_result)
 
-    async def a_generate(self, prompt: str) -> str:
-        return self.generate(prompt)
+    async def a_generate(self, prompt: str, schema: BaseModel) -> BaseModel:
+        return self.generate(prompt, schema)
 
     # def batch_generate(self, prompts: List[str]) -> List[str]:
     #     model = self.load_model()
@@ -106,8 +107,11 @@ class LoggingModel:
 
         return output
 
-    async def a_generate(self, prompt: str) -> str:
-        return await self.model.a_generate(prompt)
+    async def a_generate(self, prompt: str, schema: BaseModel) -> BaseModel:
+        
+        output = await self.model.a_generate(prompt, schema)
+        
+        return output
 
     # def batch_generate(self, prompts):
     #     return self.model.batch_generate(prompts)
@@ -123,7 +127,7 @@ def deepeval_baseline(base_model_name) -> int:
         tasks=[MMLUTask.HIGH_SCHOOL_MATHEMATICS],
         n_shots=5
     )
-    mmlu_benchmark.evaluate(model=baseline_model)
+    mmlu_benchmark.evaluate(model=baseline_model, run_async=True)
 
     print("Baseline MMLU Benchmark Results:")
     print(mmlu_benchmark.overall_score)
@@ -142,7 +146,7 @@ def test_deepeval_benchmarks(model_name, base_model_name) -> int:
         tasks=[MMLUTask.HIGH_SCHOOL_MATHEMATICS],
         n_shots=5
     )
-    mmlu_benchmark.evaluate(model=model_to_test)
+    mmlu_benchmark.evaluate(model=model_to_test, run_async=True)
     
     print("MMLU Benchmark Results:")
     print(mmlu_benchmark.overall_score)

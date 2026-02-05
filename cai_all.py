@@ -1,5 +1,3 @@
-import defaultdict
-
 import torch
 from transformers import BitsAndBytesConfig
 
@@ -7,7 +5,9 @@ from ai_completions_hf_model_anthropic import create_revisions
 from create_sft_model import finetune_and_merge_weights
 from hf_rlaif import grpo_sft_model_with_reward_model
 from deepeval_tests import test_deepeval_benchmarks, deepeval_baseline
+
 import csv
+from collections import defaultdict
 
 # Specify model information
 BASE_MODEL_NAME = "Qwen/Qwen2-1.5B"
