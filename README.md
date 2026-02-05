@@ -7,6 +7,14 @@
 
 This repo was updated to support training for constitutional alignment.
 
+
+Structure:
+The `cai_all.py` file is used to test a number of different models. `cai_all` calls the revision method (`create_revisions` and `finetune_and_merge_weights`) to SFT the base model. We then train a reward model on cases and principles and fine-tune our SFT'd model via GRPO. This happens in the `hf_rlaif.py` file.
+
+Testing is implemented in `deepeval_tests.py`
+
+SPICA for case retrieval during SFT and GRPO fine-tuning is implemented in `spica.py`
+
 New functions:
 `revise_responses_on_constitution_openai`
 
