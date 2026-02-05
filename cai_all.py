@@ -1,10 +1,13 @@
+import defaultdict
+
 import torch
 from transformers import BitsAndBytesConfig
 
 from ai_completions_hf_model_anthropic import create_revisions
 from create_sft_model import finetune_and_merge_weights
 from hf_rlaif import grpo_sft_model_with_reward_model
-from deepeval_tests import test_deepeval_benchmarks
+from deepeval_tests import test_deepeval_benchmarks, deepeval_baseline
+import csv
 
 # Specify model information
 BASE_MODEL_NAME = "Qwen/Qwen2-1.5B"
@@ -97,6 +100,14 @@ if __name__ == "__main__":
                                       ModelConfigSmall('Qwen/Qwen2-1.5B'), 
                                       ModelConfigSmall('Qwen/Qwen2-1.5B', sft_on_revisions=True)]
     
+    
+    eval_scores = defaultdict(list)
+    
+    baseline_mmlu = deepeval_baseline(BASE_MODEL_NAME)
+    print(baseline_mmlu)
+    
+    eval_scores[BASE_MODEL_NAME].append(baseline_mmlu)
+    
     for each_config in initial_list_of_models_to_test:
     # for each_config in list_of_models_to_test:
     
@@ -122,4 +133,15 @@ if __name__ == "__main__":
         else:
             final_model_name = "grpo_model_constitution_FINAL"
         
-        test_deepeval_benchmarks(final_model_name, sft_model_name)
+        mmlu_score = test_deepeval_benchmarks(final_model_name, sft_model_name)
+        eval_scores[final_model_name].append(mmlu_score)
+    
+    # Save eval_scores to a CSV file
+    output_file = "eval_scores.csv"
+    with open(output_file, mode='w', newline='') as file:
+        writer = csv.writer(file)
+        writer.writerow(["Model Name", "Scores"])
+        for model_name, scores in eval_scores.items():
+            writer.writerow([model_name, ", ".join(map(str, scores))])
+
+    print(f"Evaluation scores saved to {output_file}")
