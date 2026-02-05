@@ -75,7 +75,13 @@ class ModelConfigSmall(Config):
         self.constitution_path=constitution_path
         
     def __str__(self):
-        print(f"\nModel name: {self.model_name}, number of harmlessness comps: {self.constitutionally_generated_harmlessness_comparisons}")
+        
+        if not self.testing_mode:
+            number_of_comps = self.constitutionally_generated_harmlessness_comparisons
+        else:
+            number_of_comps = 1
+        
+        return f"\nModel name: {self.model_name}, number of harmlessness comps: {number_of_comps}"
     
 # ---- MAIN PIPELINE ----
 # GRPO: ... otherwise "expected mat1 and mat2 to have the same dtype"
