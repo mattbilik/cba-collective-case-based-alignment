@@ -119,7 +119,7 @@ class MultiGPULoader(Model):
         
         # Cache for models loaded on specific devices
         self.models = {}
-        self.tokenizers = {}
+        # self.tokenizers = {}
 
     def get_resources(self, device: str):
         if device not in self.models:
@@ -133,12 +133,15 @@ class MultiGPULoader(Model):
             )
 
             self.models[device] = model_4bit
-            self.tokenizers[device] = self.tokenizer
+            # self.tokenizers[device] = self.tokenizer
             
-        return self.models[device], self.tokenizers[device]
+        return self.models[device], self.tokenizer
     
     def get_number_of_gpus(self) -> int:
         return self.num_gpus
+    
+    def get_shared_tokenizer(self) -> AutoTokenizer:
+        return self.tokenizer
     
     async def delete_models_and_create_new_ones(self, new_config: Config):
         acquires = []

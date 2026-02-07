@@ -221,7 +221,6 @@ class SFTModel:
 #         self.__train_ppo()
 #         self.ppo_trainer.save_model("ppo_model_constitution")
 
-
 class RewardDataset:
     def __init__(self, config, model_loader: MultiGPULoader):
 
@@ -232,11 +231,9 @@ class RewardDataset:
             self.constitution = json.load(f)
         self.num_samples = config.constitutionally_generated_harmlessness_comparisons
 
-        self.tokenizer = AutoTokenizer.from_pretrained(BASE_MODEL)
+        self.tokenizer = model_loader.get_shared_tokenizer()
         self.tokenizer.pad_token_id = self.tokenizer.eos_token_id
         
-        # number_of_gpus = model_loader.num_gpus
-
         self.prompt_iterator = get_batch_iterator(['hh'], tokenizer=self.tokenizer, split='train', batch_size=1, sft_mode=True,
                                                   seed=0, n_epochs=1, cache_dir=os.getenv("PROJECT_CACHE", "~/.cache"), shuffle=False,
                                                   max_prompt_length=256, max_length=512,
