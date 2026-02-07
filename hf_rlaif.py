@@ -9,6 +9,7 @@ from datasets import Dataset
 from tqdm import tqdm
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from preference_datasets import get_batch_iterator
+from cai_all import MultiGPULoader
 
 """
 1. Use SFT'd model to generate pairs for RLAIF.
@@ -43,13 +44,13 @@ def free_cuda_memory():
 
 class SFTModel:
     # def __init__(self, model_name=BASE_MODEL, adapter_name=ADAPTER_MODEL, device="cpu"):
-    def __init__(self, config, model_name=BASE_MODEL, device_index=1):
+    def __init__(self, config, device_index=1):
 
         # Actually do not want to use the adapter, want to use our new finetuned model from train_peft.py
 
-        print("setting model,", model_name)
+        print("setting model,", config.model_name)
         self.model = AutoModelForCausalLM.from_pretrained(
-            model_name,
+            config.model_name,
             # Want to be moving SFT model to specific GPU for concurrent generation
             device_map={"": device_index},
             max_memory=config.max_memory,
@@ -57,8 +58,8 @@ class SFTModel:
             quantization_config=config.bnb_config
         )
 
-        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
-        self.model_name = model_name
+        self.tokenizer = AutoTokenizer.from_pretrained(config.model_name)
+        self.model_name = config.model_name
     
     def generate_response(self, prompt,
                           max_new_tokens=100,
@@ -222,16 +223,19 @@ class SFTModel:
 
 
 class RewardDataset:
-    def __init__(self, sft_model: SFTModel, constitution_path='constitution.json', num_samples=1000):
+    def __init__(self, config, model_loader: MultiGPULoader):
 
-        self.SFT_model = sft_model
+        self.model_loader = model_loader
+        constitution_path = config.constitution_path
 
         with open(constitution_path, 'r') as f:
             self.constitution = json.load(f)
-        self.num_samples = num_samples  # Number of prompts to process
+        self.num_samples = config.constitutionally_generated_harmlessness_comparisons
 
         self.tokenizer = AutoTokenizer.from_pretrained(BASE_MODEL)
         self.tokenizer.pad_token_id = self.tokenizer.eos_token_id
+        
+        # number_of_gpus = model_loader.num_gpus
 
         self.prompt_iterator = get_batch_iterator(['hh'], tokenizer=self.tokenizer, split='train', batch_size=1, sft_mode=True,
                                                   seed=0, n_epochs=1, cache_dir=os.getenv("PROJECT_CACHE", "~/.cache"), shuffle=False,
@@ -240,61 +244,91 @@ class RewardDataset:
 
         self.__generate_completions_and_scores()
 
+    async def __generate_completions_and_scores(self):
+        """
+        Parallelized generation using gpu pool
+        """
+        tasks = []
+        prompts_to_process = []
+
+        # 1. Extract prompts from the iterator
+        # (Assuming the iterator is still sync, we pull prompts into a list)
+        for batch in self.prompt_iterator:
+            prompts_to_process.extend(batch['prompt'])
+            if len(prompts_to_process) >= self.num_samples:
+                prompts_to_process = prompts_to_process[:self.num_samples]
+                break
+            
+        def process_single_prompt(model, tokenizer, device, prompt, principle):
+            # This logic runs inside a thread on a specific GPU
+            # Note: We pass the specific model/tokenizer from the pool
+            
+            # Helper for local generation
+            def get_resp(p):
+                inputs = tokenizer("You are a helpful assistant. " + p, return_tensors="pt").to(device)
+                out = model.generate(**inputs, max_new_tokens=100, temperature=1.5, do_sample=True)
+                return tokenizer.decode(out[0], skip_special_tokens=True)
+
+            resp_1 = get_resp(prompt)
+            resp_2 = get_resp(prompt)
+
+            principle = random.choice(self.constitution['principles'])
+
+            # Compute log probabilities for response A and response B
+            log_prob, chosen_response, rejected_response = self.__generate_log_probs(
+                prompt, principle, resp_1, resp_2)
+
+            return {
+                "prompt": prompt,
+                "chosen": chosen_response,
+                "rejected": rejected_response,
+                "margin": log_prob 
+            }
+
+        for prompt in prompts_to_process:
+            principle = random.choice(self.constitution['principles'])
+            # We schedule the task through your available GPU manager
+            task = self.model_loader.call_method_with_available_GPU(
+                process_single_prompt, 
+                prompt, 
+                principle
+            )
+            tasks.append(task)
+            
+        print(f"Scheduling {len(tasks)} tasks across the GPU pool...")
+        results = await tqdm.gather(*tasks, desc="RLAIF Generation")
+
+        # 5. Build final dataset
+        self.dataset = Dataset.from_list(results)
+        print(f"Generated {len(self.dataset)} pairs.")
+        
     # def __get_prompt_from_hh(self, instruction):
     #     return _get_prompt_from_hh_anthropic(instruction)
 
     # def __get_multi_turns_from_hh(self, instruction):
     #     return get_all_turns_from_hh_anthropic(instruction)
 
-    def __get_ai_output_from_sft_model(self, prompt):
-        return self.SFT_model.generate_response(prompt, temperature=1.5)
+    # def __get_ai_output_from_sft_model(self, prompt):
+    #     return self.SFT_model.generate_response(prompt, temperature=1.5)
     
+    # def __run_on_gpu(gpu_id, prompts):
+    #     sft_model = SFTModel(model_name=BASE_MODEL, device_index=gpu_id)
+        
+    #     responses = []
+    #     for prompt in prompts:
+    #         response = sft_model.generate_response(prompt, temperature=1.5)
+    #         responses.append(response)
+        
+    #     return responses
     
-    def __run_on_gpu(gpu_id, prompts):
-        sft_model = SFTModel(model_name=BASE_MODEL, device_index=gpu_id)
-        
-        responses = []
-        for prompt in prompts:
-            response = sft_model.generate_response(prompt, temperature=1.5)
-            responses.append(response)
-        
-        return responses
-    
-    # TODO: finish this function
-    def __concurrently_generate_response_pairs(self, prompts):
-        # Split prompts into batches for each GPU
-        num_gpus = torch.cuda.device_count()
-        prompt_batches = [[] for _ in range(num_gpus)]
-        
+    # def __generate_response_pairs(self, prompt):
 
-        for i, prompt in enumerate(prompts):
-            prompt_batches[i % num_gpus].append(prompt)
-            
-        responses = [None] * len(prompts)
-        
-        with ProcessPoolExecutor(max_workers=num_gpus) as executor:
-            futures = {executor.submit(self.__run_on_gpu, gpu_id, batch): (gpu_id, batch)
-                       for gpu_id, batch in enumerate(prompt_batches)}
-            for future in tqdm(as_completed(futures), total=len(futures), desc="Generating responses"):
-                gpu_id, batch = futures[future]
-                try:
-                    batch_responses = future.result()
-                    for prompt, response in zip(batch, batch_responses):
-                        index = prompts.index(prompt)
-                        responses[index] = response
-                except Exception as e:
-                    print(f"Error generating responses on GPU {gpu_id}: {e}")
-                    
-        return responses
+    #     print("\n**********************************")
+    #     print("Generating response for prompt:", prompt)
 
-    def __generate_response_pairs(self, prompt):
-
-        print("\n**********************************")
-        print("Generating response for prompt:", prompt)
-
-        response_1 = self.__get_ai_output_from_sft_model(prompt)
-        response_2 = self.__get_ai_output_from_sft_model(prompt)
-        return response_1, response_2
+    #     response_1 = self.__get_ai_output_from_sft_model(prompt)
+    #     response_2 = self.__get_ai_output_from_sft_model(prompt)
+    #     return response_1, response_2
 
     def compute_log_prob_response(self, prompt_message, response):
         new_message = prompt_message + \
@@ -503,6 +537,8 @@ class RewardDataset:
         prompt_idx = 0
 
         for batch in tqdm(self.prompt_iterator):
+            
+            # Getting batches of 4:
 
             prompt_idx += 1
 
@@ -765,19 +801,19 @@ class GRPOTrainerRLAIF:
         merged_model.save_pretrained(FINAL_MODEL_NAME)
         grpo_trainer.tokenizer.save_pretrained(FINAL_MODEL_NAME)
 
-def grpo_sft_model_with_reward_model(config, model_name: str = BASE_MODEL, constitution_path='constitution.json') -> str:
+def grpo_sft_model_with_reward_model(config, model_loader: MultiGPULoader) -> str:
     """
     1. Create SFT model
     2. Create reward dataset with SFT model
     3. Train reward model with reward dataset
     4. GRPO SFT model with reward model
     """
-    
-    sft_model = SFTModel(config, model_name=model_name)
-    
-    dataset = RewardDataset(sft_model,
-                            constitution_path=constitution_path, 
+        
+    dataset = RewardDataset(config, model_loader,
+                            constitution_path=config.constitution_path, 
                             num_samples=config.constitutionally_generated_harmlessness_comparisons)
+
+    sft_model = SFTModel(config)
 
     free_cuda_memory()
 
