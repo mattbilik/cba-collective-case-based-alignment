@@ -7,9 +7,9 @@ from transformers import AutoTokenizer, AutoModelForCausalLM, AutoModelForSequen
 from trl import RewardTrainer, RewardConfig, PPOTrainer, PPOConfig, GRPOTrainer, GRPOConfig
 from datasets import Dataset
 from tqdm import tqdm
-from concurrent.futures import ProcessPoolExecutor, as_completed
 from preference_datasets import get_batch_iterator
-from cai_all import AccelerateModelLoader
+
+from accelerate_local import AccelerateModelLoader
 
 """
 1. Use SFT'd model to generate pairs for RLAIF.
@@ -670,9 +670,7 @@ def grpo_sft_model_with_reward_model(config, model_loader: AccelerateModelLoader
     4. GRPO SFT model with reward model
     """
         
-    dataset = RewardDataset(config, model_loader,
-                            constitution_path=config.constitution_path, 
-                            num_samples=config.constitutionally_generated_harmlessness_comparisons)
+    dataset = RewardDataset(config, model_loader)
 
     print(dataset.get_dataset())
     
