@@ -11,6 +11,7 @@ import numpy as np
 from typing import Dict, List, Optional, Iterator, Callable, Union, Tuple
 import json
 import os
+from typing import Callable
 
 
 def extract_anthropic_prompt(prompt_and_response):
@@ -19,7 +20,7 @@ def extract_anthropic_prompt(prompt_and_response):
     search_term_idx = prompt_and_response.rfind(search_term)
     assert search_term_idx != -1, f"Prompt and response does not contain '{search_term}'"
     return prompt_and_response[:search_term_idx + len(search_term)]
-
+    
 
 def strip_html_tags(html_string):
     """Strip HTML tags from a string, except for <code> tags (which contain real code in the StackExchange answers)."""
@@ -700,9 +701,11 @@ def get_batch_iterator(names: List[str],
                        sft_mode: bool = False,
                        n_epochs: Optional[int] = None,
                        n_examples: Optional[int] = None,
+                       fast_forward: Optional[int] = None,
                        seed:int = 0,
                        silent: bool = False,
                        cache_dir: Optional[str] = None,
+                       text_preprocess_func: Optional[Callable[str], str]  = None,
                        **kwargs) -> Iterator[Dict]:
     """Get an iterator over batches of data. Stops after n_epochs or n_examples, whichever comes first.
 
@@ -715,11 +718,13 @@ def get_batch_iterator(names: List[str],
         max_length: Maximum length of the combined prompt + response.
         max_prompt_length: Maximum length of the prompt.
         sft_mode: Whether to use SFT mode (i.e., return sft_target instead of chosen/rejected). In sft mode, we just return chosen_input_ids, but they contain the sft_target.
-        n_epochs: Number of epochs to run for. This or n_examples must be specified.
-        n_examples: Number of examples to run for. This or n_epochs must be specified.
+        n_epochs: Number of epochs to run for. This or n_examples must be specified. If both are specified, run for min(n_epochs*dataset_size, n_examples) iterations
+        n_examples: Number of examples to run for. This or n_epochs must be specified. If both are specified, run for min(n_epochs*dataset_size, n_exmaples) iterations
+        fast_forward: Number of initial examples to skip. 
         seed: Random seed.
         silent: Whether to silence the progress bar(s).
         cache_dir: Directory to cache the datasets in.
+        text_preprocess_func: Function to be called on raw text for preprocessing purposes
     """
     assert n_epochs is not None or n_examples is not None, "Must specify either n_epochs or n_examples"
     if silent:
@@ -732,7 +737,11 @@ def get_batch_iterator(names: List[str],
         for name in names:
             truncation_mode = 'keep_end' if name in ['hh', 'sharegpt'] else 'keep_start'
             for prompt, data in get_dataset(name, split, silent=silent, cache_dir=cache_dir, **kwargs).items():
-                flat_data.append((prompt, data['responses'], data['pairs'], data['sft_target'], truncation_mode))
+                if text_preprocess_func is not None:
+                    preprocessed_text = text_preprocess_func(prompt)
+                else:
+                    preprocessed_text = prompt
+                flat_data.append((preprocessed_text, data['responses'], data['pairs'], data['sft_target'], truncation_mode))
 
     collate_fn = get_collate_fn(tokenizer)
 
@@ -753,9 +762,10 @@ def get_batch_iterator(names: List[str],
             if done:
                 break
             if sft_mode:
-                batch_element = tokenize_batch_element(prompt, sft_target, sft_target, truncation_mode, tokenizer, max_length, max_prompt_length)
-                batch_element = {k: v for k, v in batch_element.items() if 'rejected' not in k}
-                batch.append(batch_element)
+                if example_idx >= fast_forward:
+                    batch_element = tokenize_batch_element(prompt, sft_target, sft_target, truncation_mode, tokenizer, max_length, max_prompt_length)
+                    batch_element = {k: v for k, v in batch_element.items() if 'rejected' not in k}
+                    batch.append(batch_element)
                 example_idx += 1
                 if len(batch) == batch_size:
                     yield collate_fn(batch)
@@ -769,8 +779,9 @@ def get_batch_iterator(names: List[str],
                 for p in pairs:
                     if done:
                         break
-                    batch_element = tokenize_batch_element(prompt, responses[p[0]], responses[p[1]], truncation_mode, tokenizer, max_length, max_prompt_length)
-                    batch.append(batch_element)
+                    if example_idx >= fast_forward:
+                        batch_element = tokenize_batch_element(prompt, responses[p[0]], responses[p[1]], truncation_mode, tokenizer, max_length, max_prompt_length)
+                        batch.append(batch_element)
                     example_idx += 1
                     if len(batch) == batch_size:
                         yield collate_fn(batch)
