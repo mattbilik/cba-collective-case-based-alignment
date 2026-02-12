@@ -284,7 +284,7 @@ class RewardDataset:
 
         for prompt in prompts_to_process:
             principle = random.choice(self.constitution['principles'])
-            # We schedule the task through your available GPU manager
+
             task = self.model_loader.call_method_with_available_GPU(
                 process_single_prompt, 
                 prompt, 
@@ -386,7 +386,7 @@ class RewardDataset:
         #     # We want to use the SFT model to compute the log probabilities of the responses
         #     outputs = self.SFT_model.get_outputs(**input_strings, labels=labels)
 
-        with torch.no_grad():
+        with torch.inference_mode():
             outputs = self.SFT_model.get_model()(
                 input_ids=inputs["input_ids"],
                 attention_mask=inputs["attention_mask"],
@@ -809,6 +809,8 @@ def grpo_sft_model_with_reward_model(config, model_loader: MultiGPULoader) -> st
     dataset = RewardDataset(config, model_loader,
                             constitution_path=config.constitution_path, 
                             num_samples=config.constitutionally_generated_harmlessness_comparisons)
+
+    # TODO: Reward model should be instantiated on existing GPU
 
     sft_model = SFTModel(config)
 
