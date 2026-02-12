@@ -232,6 +232,7 @@ class AccelerateModelLoader(Model):
         output = self.tokenizer.decode(generated_tokens[0], skip_special_tokens=True)
         
         self.accelerator.wait_for_everyone()
+        
         return output
     
     def get_model_outputs(self, inputs, labels):
@@ -251,35 +252,31 @@ class AccelerateModelLoader(Model):
         
     #     self.accelerator.wait_for_everyone()
         
-    # def freeze_model_for_inference(self, model_path):
-    #     """
-    #     Freeze fine-tuned model for inference
+    def freeze_model_for_inference(self, model_path):
+        """
+        Freeze fine-tuned model for inference
         
-    #     :param self: self
-    #     :param model_path: model to freeze
-    #     """
+        :param self: self
+        :param model_path: model to freeze
+        """
         
-    #     inference_model = AutoModelForCausalLM.from_pretrained(
-    #         model_path,
-    #         quantization_config=self.bnb_config,
-    #         device_mesh=self.accelerator.torch_device_mesh
-    #     ).eval()
+        inference_model = AutoModelForCausalLM.from_pretrained(
+            model_path,
+            quantization_config=self.bnb_config,
+            device_mesh=self.accelerator.torch_device_mesh
+        ).eval()
         
-    #     self.accelerator.wait_for_everyone()
+        self.accelerator.wait_for_everyone()
             
-    #     return inference_model
+        return inference_model
 
-    def delete_model_and_set_new_one(self, new_model_path):
+    def delete_model(self):
         del self.model
         del self.tokenizer
         
         self.accelerator.free_memory(self.model)
         self.accelerator.free_memory(self.tokenizer)
-        
-        self.model_path = new_model_path
-        model_4bit, self.tokenizer = self.__create_model()
-        self.model = self.accelerator.prepare(model_4bit)
-    
+            
 # ---- MAIN PIPELINE ----
 # GRPO: ... otherwise "expected mat1 and mat2 to have the same dtype"            
 

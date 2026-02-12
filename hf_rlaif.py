@@ -110,11 +110,10 @@ class RewardDataset:
 
         self.__generate_completions_and_scores()
 
-    async def __generate_completions_and_scores(self):
+    def __generate_completions_and_scores(self):
         """
-        Parallelized generation using gpu pool
+        Parallelized generation using accelerate
         """
-        tasks = []
         prompts_to_process = []
 
         # 1. Extract prompts from the iterator
@@ -152,20 +151,12 @@ class RewardDataset:
                 "margin": log_prob 
             }
 
+        results = []
         for prompt in prompts_to_process:
             principle = random.choice(self.constitution['principles'])
-
-            task = self.model_loader.call_method_with_available_GPU(
-                process_single_prompt, 
-                prompt, 
-                principle
-            )
-            tasks.append(task)
-            
-        print(f"Scheduling {len(tasks)} tasks across the GPU pool...")
-        results = await tqdm.gather(*tasks, desc="RLAIF Generation")
-
-        # 5. Build final dataset
+            result = process_single_prompt(prompt, principle)
+            results.append(result)           
+             
         self.dataset = Dataset.from_list(results)
         print(f"Generated {len(self.dataset)} pairs.")
 
@@ -358,6 +349,9 @@ class RewardDataset:
 
         dataset = Dataset.from_list(rows)
         self.dataset = dataset
+        
+        # NOTE: DELETING MODEL THAT CREATED REWARD DATASET 
+        self.model_loader.delete_model()
 
     def __generate_completions_and_scores(self):
         """
@@ -490,9 +484,14 @@ class RewardModel:
         self.output_dir = f"./final-reward-model-constitution-{self.model_name}"
 
     def train_reward_model(self):
-        RewardModelTrainer(self.model_loader).save_model(self.checkpoint_dir, 
-                                                         self.adapter_dir, 
-                                                         self.output_dir)              
+        
+        reward_model_trainer = RewardModelTrainer(self.model_loader)
+        reward_model_trainer.save_model(self.checkpoint_dir, 
+                                        self.adapter_dir, 
+                                        self.output_dir)
+        
+        # NOTE: DELETING REWARD MODEL (WILL RELOAD LATER)
+        reward_model_trainer.delete_model()             
 
     def get_reward_model_name(self):
         return self.output_dir
@@ -500,55 +499,62 @@ class RewardModel:
     def get_dataset(self):
         return self.dataset
 
-
-class GRPOTrainerRLAIF:
-    def __init__(self, reward_model: RewardModel, model_to_GRPO: SFTModel, config):
+class GRPOTrainerRLAIF(AccelerateModelLoader):
+    def __init__(self, reward_model: RewardModel, model_loader: AccelerateModelLoader, config):
+        super().__init__(model_loader.model_config, model_loader.accelerator)
 
         # This returns the path / name of the model that we are fine-tuning with GRPO
-        model_name = model_to_GRPO.get_model_name()
+        model_name = config.model_name
         reward_model_name = reward_model.get_reward_model_name()
 
         # Determine the device map configuration
         
-        assert torch.cuda.is_available(), "need CUDA"
-        
-        device_map = "auto"
-
         self.dataset = reward_model.get_dataset()
+        
+        # ----- LOADING MODEL TO FINETUNE -----
 
+        with self.accelerator.main_process_first():
         # Maybe try not loading sft_model in fp16
-        self.sft_model = AutoModelForCausalLM.from_pretrained(
-            model_name,
-            device_map=device_map,
-            quantization_config=config.bnb_config,
-            max_memory=config.max_memory,
-            dtype=config.dtype
-        )
+            sft_model = AutoModelForCausalLM.from_pretrained(
+                model_name,
+                quantization_config=config.bnb_config,
+                dtype=config.dtype,
+                device_mesh=self.accelerator.torch_device_mesh
+            )
+            
+            tokenizer = AutoTokenizer.from_pretrained(
+                model_name,
+                fix_mistral_regex=True
+            )
+            
+            tokenizer.pad_token = tokenizer.eos_token
+        
+        self.sft_model = self.accelerator.prepare(sft_model)
+        self.tokenizer = tokenizer
         
         # Trying this to resolve dtype mismatch issues
         # NOTE: This seems to move the model to 32-bit precision
-        self.sft_model = prepare_model_for_kbit_training(self.sft_model)
-
-        self.tokenizer = AutoTokenizer.from_pretrained(
-            model_name,
-            fix_mistral_regex=True
-        )
-
-        self.tokenizer.pad_token = self.tokenizer.eos_token
+        # self.sft_model = prepare_model_for_kbit_training(self.sft_model)
+        # -----------------
 
         # Base reward model is the same as the model we're fine-tuning
         # The reward model is actually already saved with the PEFT layers
         
         # ALREADY QUANTIZED
-        self.reward_model = AutoModelForSequenceClassification.from_pretrained(
-            reward_model_name,
-            device_map=device_map,
-            max_memory=config.max_memory,
-            dtype=config.dtype
-        )
+        
+        # ----- LOADING REWARD MODEL -----
+        
+        with self.accelerator.main_process_first():
+            reward_model = AutoModelForSequenceClassification.from_pretrained(
+                reward_model_name,
+                dtype=config.dtype,
+                device_mesh=self.accelerator.torch_device_mesh
+            )
+            
+            reward_tokenizer = AutoTokenizer.from_pretrained(model_name)
 
-        self.reward_tokenizer = AutoTokenizer.from_pretrained(
-            model_name)
+        self.reward_model = reward_model
+        self.reward_tokenizer = reward_tokenizer
 
     # Need to convert reward model to reward function
     def reward_fn(self, completions, prompts, **kwargs):
@@ -581,7 +587,7 @@ class GRPOTrainerRLAIF:
             padding=True,
             truncation=True,
             return_tensors="pt"
-        ).to(self.reward_model.device)
+        )
 
         print("Inputs IDs", len(enc["input_ids"]))
 
@@ -597,40 +603,42 @@ class GRPOTrainerRLAIF:
             # scalar reward per sequence
             rewards = logits[:, 1] - logits[:, 0]
 
-        rewards = rewards.detach().cpu().tolist()
+        rewards = self.accelerator.gather_for_metrics(rewards).cpu().tolist()
         print("Recast rewards", len(rewards))
+        
+        self.accelerator.wait_for_everyone()
 
         return rewards
 
     def train_and_save_model(self):
 
-        peft_config = LoraConfig(
-            task_type=TaskType.CAUSAL_LM,
-            inference_mode=False,
-            r=8,
-            lora_alpha=32,
-            lora_dropout=0.1,
-        )
+        with self.accelerator.main_process_first():
+            peft_config = LoraConfig(
+                task_type=TaskType.CAUSAL_LM,
+                inference_mode=False,
+                r=8,
+                lora_alpha=32,
+                lora_dropout=0.1,
+            )
 
-        grpo_config = GRPOConfig(
-            output_dir="./grpo_model_constitution_checkpoints",
-            per_device_train_batch_size=1,
-            gradient_accumulation_steps=8,
-            num_train_epochs=1,
-            fp16=True,
-            bf16=False
-        )
+            grpo_config = GRPOConfig(
+                output_dir="./grpo_model_constitution_checkpoints",
+                per_device_train_batch_size=1,
+                gradient_accumulation_steps=8,
+                num_train_epochs=1,
+                fp16=True,
+                bf16=False
+            )
 
-        grpo_trainer = GRPOTrainer(
-            model=self.sft_model,
-            args=grpo_config,
-            train_dataset=self.dataset,
-            reward_funcs=[self.reward_fn],
-            peft_config=peft_config,
-        )
+            grpo_trainer = GRPOTrainer(
+                model=self.sft_model,
+                args=grpo_config,
+                train_dataset=self.dataset,
+                reward_funcs=[self.reward_fn],
+                peft_config=peft_config,
+            )
 
-        # Need to fix dtype issues here
-
+        # NOTE: dtype issues are sort of common here
         print(f"Model dtype: {self.sft_model.dtype}")
         print(f"LM Head weight dtype: {self.sft_model.lm_head.weight.dtype}")
         print(self.sft_model.model.norm.weight)
@@ -638,16 +646,21 @@ class GRPOTrainerRLAIF:
         assert self.sft_model.dtype == self.sft_model.lm_head.weight.dtype, "Model and LM head dtypes do not match"
 
         grpo_trainer.train()
-        grpo_trainer.save_model("grpo_model_constitution_adapter")
+        self.accelerate.wait_for_everyone()
+        
+        if self.accelerator.is_local_main_process:
+            grpo_trainer.save_model("grpo_model_constitution_adapter")
 
-        base_model = AutoModelForCausalLM.from_pretrained(BASE_MODEL)
-        lora_model = PeftModel.from_pretrained(
-            base_model, "grpo_model_constitution_adapter")
+        with self.accelerator.main_process_first():
+            base_model = AutoModelForCausalLM.from_pretrained(BASE_MODEL)
+            lora_model = PeftModel.from_pretrained(
+                base_model, "grpo_model_constitution_adapter")
 
-        merged_model = lora_model.merge_and_unload()
+            merged_model = lora_model.merge_and_unload()
 
-        merged_model.save_pretrained(FINAL_MODEL_NAME)
-        grpo_trainer.tokenizer.save_pretrained(FINAL_MODEL_NAME)
+        if self.accelerator.is_local_main_process:
+            merged_model.save_pretrained(FINAL_MODEL_NAME)
+            grpo_trainer.tokenizer.save_pretrained(FINAL_MODEL_NAME)
 
 def grpo_sft_model_with_reward_model(config, model_loader: AccelerateModelLoader) -> str:
     """
@@ -663,13 +676,13 @@ def grpo_sft_model_with_reward_model(config, model_loader: AccelerateModelLoader
 
     print(dataset.get_dataset())
     
-    reward_model = RewardModel(model_loader, dataset, config)
-    reward_model.train_reward_model()
-
+    # reward_model = RewardModel(model_loader, dataset, config)
+    # reward_model.train_reward_model()
+    
     # grpo_trainer = GRPOTrainerRLAIF(
-    #     reward_model, sft_model, config)
+    #     reward_model, model_loader, config)
 
-    # # Train sft_model with GRPO and save
+    # # # Train sft_model with GRPO and save
     # grpo_trainer.train_and_save_model()
     
     return FINAL_MODEL_NAME
