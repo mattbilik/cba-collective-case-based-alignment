@@ -1,5 +1,5 @@
 import torch
-from transformers import BitsAndBytesConfig, AutoModelForCausalLM, AutoTokenizer
+from transformers import BitsAndBytesConfig, AutoTokenizer, AutoModelForCausalLM
 
 from ai_completions_hf_model_anthropic import create_revisions
 from create_sft_model import finetune_and_merge_weights
@@ -10,6 +10,10 @@ import csv
 from collections import defaultdict
 
 import asyncio
+
+from accelerate import Accelerator
+from accelerate.parallelism_config import ParallelismConfig
+from accelerate.utils import FullyShardedDataParallelPlugin
 
 # Specify model information
 BASE_MODEL_NAME = "Qwen/Qwen2-1.5B"
@@ -95,11 +99,11 @@ class Model:
         
         self.model_path = model_config.model_name
         self.bnb_config = model_config.bnb_config        
-        tokenizer = AutoTokenizer.from_pretrained(
-            model_config.base_model_name,
-        )
+        # tokenizer = AutoTokenizer.from_pretrained(
+        #     model_config.base_model_name,
+        # )
 
-        self.tokenizer = tokenizer    
+        # self.tokenizer = tokenizer    
 
 # ---- GPU LOADER FOR PARALLEL GENERATION ----
 
@@ -183,11 +187,118 @@ class MultiGPULoader(Model):
             finally:
                 await self.device_pool.put(device)
 
+# ---- ACCELERATE FOR PARALLEL GENERATION ----
+    
+class AccelerateModelLoader(Model):
+    def __init__(self, model_config: Config, accelerator: Accelerator):
+        super().__init__(model_config)
+        
+        self.base_model_name = model_config.base_model_name
+
+        self.accelerator = accelerator
+        
+        model_4bit, self.tokenizer = self.__create_model()      
+        self.model = self.accelerator.prepare(model_4bit) 
+                
+    def __create_model(self):
+        
+        with self.accelerator.main_process_first():
+            model_4bit = AutoModelForCausalLM.from_pretrained(
+                self.model_path,
+                quantization_config=self.bnb_config,
+                device_mesh=self.accelerator.torch_device_mesh
+            )
+            
+            tokenizer = AutoTokenizer.from_pretrained(
+                self.base_model_name,
+            )
+        
+        return model_4bit, tokenizer
+        
+    def get_tokenizer(self) -> AutoTokenizer:
+        return self.tokenizer
+    
+    def generate_text(self, prompt) -> str:
+        inputs = self.tokenizer("You are a helpful assistant. " + prompt, return_tensors="pt")
+        
+        with torch.inference_mode():
+            generated_tokens = self.model.generate(**inputs, max_new_tokens=100, temperature=1.5, do_sample=True)
+
+            generated_tokens = accelerator.pad_across_processes(
+                generated_tokens, dim=1, pad_index=self.tokenizer.pad_token_id)
+
+            generated_tokens = accelerator.gather_for_metrics(generated_tokens).cpu().tolist()
+
+        output = self.tokenizer.decode(generated_tokens[0], skip_special_tokens=True)
+        
+        self.accelerator.wait_for_everyone()
+        return output
+    
+    def get_model_outputs(self, inputs, labels):
+        with torch.inference_mode():
+            outputs = self.SFT_model.get_model()(
+                input_ids=inputs["input_ids"],
+                attention_mask=inputs["attention_mask"],
+                labels=labels
+            )
+            
+        self.accelerator.wait_for_everyone()
+        return outputs
+    
+    # def call_method_with_available_GPU(self, method, *args, **kwargs):
+        
+    #     method(*args, **kwargs)
+        
+    #     self.accelerator.wait_for_everyone()
+        
+    # def freeze_model_for_inference(self, model_path):
+    #     """
+    #     Freeze fine-tuned model for inference
+        
+    #     :param self: self
+    #     :param model_path: model to freeze
+    #     """
+        
+    #     inference_model = AutoModelForCausalLM.from_pretrained(
+    #         model_path,
+    #         quantization_config=self.bnb_config,
+    #         device_mesh=self.accelerator.torch_device_mesh
+    #     ).eval()
+        
+    #     self.accelerator.wait_for_everyone()
+            
+    #     return inference_model
+
+    def delete_model_and_set_new_one(self, new_model_path):
+        del self.model
+        del self.tokenizer
+        
+        self.accelerator.free_memory(self.model)
+        self.accelerator.free_memory(self.tokenizer)
+        
+        self.model_path = new_model_path
+        model_4bit, self.tokenizer = self.__create_model()
+        self.model = self.accelerator.prepare(model_4bit)
+    
 # ---- MAIN PIPELINE ----
 # GRPO: ... otherwise "expected mat1 and mat2 to have the same dtype"            
 
 if __name__ == "__main__":
     
+    data_parallel_degree = torch.cuda.device_count()
+
+    pc = ParallelismConfig(
+        dp_shard_size = 1, # number of nodes for FSDP -- disabling because only 1 node
+        dp_replicate_size = data_parallel_degree, # number of GPUs to parallelize with
+        cp_size = 1, # Context Parallel degree -- for now disabling
+        tp_size = 1, # Tensor Parallel degree -- we don't need tensor parallelism b/c models are small
+    )
+
+    accelerator = Accelerator(
+        parallelism_config=pc,
+        # fsdp_plugin=fsdp_plugin
+    )
+
     list_of_models_to_test = [ModelConfigSmall('Qwen/Qwen2-0.5B'), 
                               ModelConfigSmall('Qwen/Qwen2-1.5B'), 
                               ModelConfigSmall('Qwen/Qwen3-0.6B'), 
@@ -209,7 +320,7 @@ if __name__ == "__main__":
     for each_config in initial_list_of_models_to_test:
     # for each_config in list_of_models_to_test:
     
-        model_loader = MultiGPULoader(each_config)
+        model_loader = AccelerateModelLoader(each_config, accelerator)
         constitution_path = each_config.constitution_path
     
         # print("Starting training with configuration:", each_config)

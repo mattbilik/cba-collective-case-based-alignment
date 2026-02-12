@@ -9,7 +9,7 @@ from datasets import Dataset
 from tqdm import tqdm
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from preference_datasets import get_batch_iterator
-from cai_all import MultiGPULoader
+from cai_all import AccelerateModelLoader
 
 """
 1. Use SFT'd model to generate pairs for RLAIF.
@@ -90,139 +90,8 @@ class SFTModel:
     def move_to_cpu(self):
         self.model.to("cpu")
 
-# class PPOTrainerRLAIF:
-
-#     # TODO: maybe switch over to GRPO ?
-#     # def __init__(self, reward_model, dataset: Dataset, model_name, device="cpu", model_to_PPO, adapter_model=ADAPTER_MODEL):
-#     # def __init__(self, reward_model, model_to_PPO: SFTModel, adapter_model=ADAPTER_MODEL):
-#     def __init__(self, reward_model_name, model_to_PPO: SFTModel, bf16=False):
-#         """
-#         reward_model_name: reward model name/path
-#         dataset: Dataset object with prompts to train on
-#         model_name: name of the base model to fine-tune with PPO
-#         device: device to run on
-#         """
-
-#         dataset = model_to_PPO.dataset
-#         model_name = model_to_PPO.model_name
-
-#         # Determine the device map configuration
-#         if torch.cuda.is_available():
-#             # Force the model to load entirely on GPU 0
-#             device_map = {"": 0}
-#             print(f"Explicitly setting device_map to CUDA:0: {device_map}")
-#         else:
-#             # Fallback to CPU if no CUDA device is available
-#             device_map = "cpu"
-#             print(f"Explicitly setting device_map to CPU: {device_map}")
-
-#         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
-#         self.tokenizer.pad_token = self.tokenizer.eos_token
-
-#         print("\nTraining SFT'd model with PPO and our reward model:\n")
-
-#         # https://newfacade.github.io/notes-on-reinforcement-learning/17-ppo-trl.html
-#         # https://huggingface.co/docs/trl/main/en/ppo_trainer#trl.PPOConfig
-
-#         # The automodel with value head is required for PPO training (gives us a value function to compute advantages)
-#         # Maybe we actually don't want the value head here? It returns an error
-
-#         sft_model = AutoModelForCausalLM.from_pretrained(
-#             model_name,
-#             device_map=device_map
-#         )
-
-#         # Copy of the policy model we're fine-tuning
-#         reference_model = AutoModelForCausalLM.from_pretrained(
-#             model_name,
-#             device_map=device_map
-#         )
-
-#         # Another copy of the policy model we're fine-tuning
-#         value_model = AutoModelForCausalLM.from_pretrained(
-#             model_name,
-#             device_map=device_map
-#         )
-
-#         # ! Reward model is trained with PEFT, so need to load base and then PEFT on top
-#         base_reward_model = AutoModelForCausalLM.from_pretrained(
-#             model_name,
-#             device_map=device_map
-#         )
-#         reward_model = PeftModel.from_pretrained(
-#             base_reward_model, reward_model_name)
-
-#         # Turn off bf16 for mac compatability
-#         # PPO is being moved to the experimental library
-
-#         try:
-#             config = PPOConfig(
-#                 # TODO: Why are we specifying the reward model twice?
-#                 reward_model_path=reward_model_name,
-#                 bf16=bf16,  # turn off bf16 for Mac Intel compatability
-#             )
-#             print("Successfully created PPO config")
-#         except Exception as e:
-#             print("Error creating PPOConfig, likely MacOS related:", e)
-
-#         try:
-#             self.ppo_trainer = PPOTrainer(
-#                 # The model attribute is used to specify the policy model
-#                 model=sft_model,
-#                 args=config,
-
-#                 # We also need to specify the reward model, the reference model (copy of the policy model),
-#                 # and the value model (used to predict value of next state)
-#                 reward_model=reward_model,
-#                 ref_model=reference_model,
-#                 value_model=value_model,
-#                 train_dataset=dataset,
-#                 processing_class=None,
-#             )
-#         except Exception as e:
-#             print("Error initializing PPOTrainer:", e)
-
-#     def __train_ppo(self, generation_kwargs={
-#         "min_length": -1,
-#         "top_k": 0.0,
-#         "top_p": 1.0,
-#         "do_sample": True,
-#     }):
-
-#         generation_kwargs = {
-#             **generation_kwargs,
-#             "pad_token_id": self.tokenizer.eos_token_id
-#         }
-
-#         epochs = 10
-#         for epoch in tqdm(range(epochs), "epoch: "):
-#             for batch in tqdm(self.ppo_trainer.dataloader):
-#                 query_tensors = batch["input_ids"]
-
-#                 # Get response from SFTModel
-#                 response_tensors = self.ppo_trainer.generate(
-#                     query_tensors, **generation_kwargs)
-#                 batch["response"] = [self.tokenizer.decode(
-#                     r.squeeze()) for r in response_tensors]
-
-#                 # Compute reward score
-#                 texts = [q + r for q,
-#                          r in zip(batch["query"], batch["response"])]
-#                 pipe_outputs = self.reward_model(texts)
-#                 rewards = [torch.tensor(output[1]["score"])
-#                            for output in pipe_outputs]
-
-#                 # Run PPO step
-#                 stats = self.ppo_trainer.step(
-#                     query_tensors, response_tensors, rewards)
-#                 self.ppo_trainer.log_stats(stats, batch, rewards)
-
-#     def train_and_save_model(self):
-#         self.__train_ppo()
-#         self.ppo_trainer.save_model("ppo_model_constitution")
-
 class RewardDataset:
-    def __init__(self, config, model_loader: MultiGPULoader):
+    def __init__(self, config, model_loader: AccelerateModelLoader):
 
         self.model_loader = model_loader
         constitution_path = config.constitution_path
@@ -231,7 +100,7 @@ class RewardDataset:
             self.constitution = json.load(f)
         self.num_samples = config.constitutionally_generated_harmlessness_comparisons
 
-        self.tokenizer = model_loader.get_shared_tokenizer()
+        self.tokenizer = model_loader.get_tokenizer()
         self.tokenizer.pad_token_id = self.tokenizer.eos_token_id
         
         self.prompt_iterator = get_batch_iterator(['hh'], tokenizer=self.tokenizer, split='train', batch_size=1, sft_mode=True,
@@ -256,18 +125,19 @@ class RewardDataset:
                 prompts_to_process = prompts_to_process[:self.num_samples]
                 break
             
-        def process_single_prompt(model, tokenizer, device, prompt, principle):
+        def process_single_prompt(prompt, principle):
             # This logic runs inside a thread on a specific GPU
             # Note: We pass the specific model/tokenizer from the pool
             
             # Helper for local generation
-            def get_resp(p):
-                inputs = tokenizer("You are a helpful assistant. " + p, return_tensors="pt").to(device)
-                out = model.generate(**inputs, max_new_tokens=100, temperature=1.5, do_sample=True)
-                return tokenizer.decode(out[0], skip_special_tokens=True)
+            
+            # def get_resp(p):
+            #     inputs = tokenizer("You are a helpful assistant. " + p, return_tensors="pt").to(device)
+            #     out = model.generate(**inputs, max_new_tokens=100, temperature=1.5, do_sample=True)
+            #     return tokenizer.decode(out[0], skip_special_tokens=True)
 
-            resp_1 = get_resp(prompt)
-            resp_2 = get_resp(prompt)
+            resp_1 = self.model_loader.generate_text(prompt)
+            resp_2 = self.model_loader.generate_text(prompt)
 
             principle = random.choice(self.constitution['principles'])
 
@@ -298,44 +168,10 @@ class RewardDataset:
         # 5. Build final dataset
         self.dataset = Dataset.from_list(results)
         print(f"Generated {len(self.dataset)} pairs.")
-        
-    # def __get_prompt_from_hh(self, instruction):
-    #     return _get_prompt_from_hh_anthropic(instruction)
-
-    # def __get_multi_turns_from_hh(self, instruction):
-    #     return get_all_turns_from_hh_anthropic(instruction)
-
-    # def __get_ai_output_from_sft_model(self, prompt):
-    #     return self.SFT_model.generate_response(prompt, temperature=1.5)
-    
-    # def __run_on_gpu(gpu_id, prompts):
-    #     sft_model = SFTModel(model_name=BASE_MODEL, device_index=gpu_id)
-        
-    #     responses = []
-    #     for prompt in prompts:
-    #         response = sft_model.generate_response(prompt, temperature=1.5)
-    #         responses.append(response)
-        
-    #     return responses
-    
-    # def __generate_response_pairs(self, prompt):
-
-    #     print("\n**********************************")
-    #     print("Generating response for prompt:", prompt)
-
-    #     response_1 = self.__get_ai_output_from_sft_model(prompt)
-    #     response_2 = self.__get_ai_output_from_sft_model(prompt)
-    #     return response_1, response_2
 
     def compute_log_prob_response(self, prompt_message, response):
         new_message = prompt_message + \
             [{"role": "assistant", "content": response}]
-        # inputs = self.tokenizer(
-        #     new_message,
-        #     padding=True,
-        #     truncation=True,
-        #     return_tensors="pt"
-        # )
 
         inputs = self.tokenizer.apply_chat_template(
             new_message,
@@ -375,23 +211,25 @@ class RewardDataset:
         # Ignore all prompt tokens (only interested in A or B log prob)
         labels[:, :prompt_len] = -100  # ignore index for masking prompt
 
-        # Move to first layer device (for multi-GPU setups)
-        device = next(self.SFT_model.model.parameters()).device
+        # NOTE: commented out b/c accelerate
+        # # Move to first layer device (for multi-GPU setups)
+        # device = next(self.SFT_model.model.parameters()).device
 
-        inputs['input_ids'] = inputs['input_ids'].to(device)
-        inputs['attention_mask'] = inputs['attention_mask'].to(device)
-        labels.to(device)
+        # inputs['input_ids'] = inputs['input_ids'].to(device)
+        # inputs['attention_mask'] = inputs['attention_mask'].to(device)
+        # labels.to(device)
 
-        # with torch.no_grad():
         #     # We want to use the SFT model to compute the log probabilities of the responses
         #     outputs = self.SFT_model.get_outputs(**input_strings, labels=labels)
 
-        with torch.inference_mode():
-            outputs = self.SFT_model.get_model()(
-                input_ids=inputs["input_ids"],
-                attention_mask=inputs["attention_mask"],
-                labels=labels
-            )
+        outputs = self.model_loader.get_model_outputs(inputs, labels)
+        
+        # with torch.inference_mode():
+        #     outputs = self.SFT_model.get_model()(
+        #         input_ids=inputs["input_ids"],
+        #         attention_mask=inputs["attention_mask"],
+        #         labels=labels
+        #     )
 
         # The first predicted token is the one after the prompt
         response_start_index = prompt_len - 1
@@ -554,52 +392,40 @@ class RewardDataset:
             log_probs[prompt] = [log_prob, chosen_response, rejected_response]
             
         # Move SFT model back to CPU to free up GPU memory
-        self.SFT_model.move_to_cpu()
+        # self.SFT_model.move_to_cpu()
 
         self.__generate_dataset(log_probs)
 
     def get_dataset(self):
         return self.dataset
 
+class RewardModelTrainer(AccelerateModelLoader):
+    def __init__(self, model_loader):
+        # We override the model creation to use a Sequence Classification head
+        super().__init__(model_loader.model_config, model_loader.accelerator)
 
-class RewardModel:
-    def __init__(self, sft_model: SFTModel, reward_data: RewardDataset, config):
+    def __create_model(self):
+        with self.accelerator.main_process_first():
+            
+            reward_model = AutoModelForSequenceClassification.from_pretrained(
+                self.model_path,
+                quantization_config=self.bnb_config,
+                device_mesh=self.accelerator.torch_device_mesh
+            )
+            tokenizer = AutoTokenizer.from_pretrained(self.base_model_name)
+            tokenizer.pad_token = tokenizer.eos_token
+            reward_model.config.pad_token_id = tokenizer.eos_token_id
+            
+        self.model = self.accelerator.prepare(reward_model) 
+        self.tokenizer = tokenizer
 
-        # TODO: Probably do something with device here
-        self.dataset = reward_data.get_dataset()
+    def __train_reward_model(self, dataset, checkpoint_dir, adapter_dir, output_dir):
         
-        # Only using the SFT model to get the model name
-        self.model_name = sft_model.get_model_name()
-        
-        self.config = config
-
-        self.checkpoint_dir = f"./reward-model-constitution-{self.model_name}-checkpoints"
-        self.adapter_dir = f"./reward-model-constitution-{self.model_name}-adapters"
-        self.output_dir = f"./final-reward-model-constitution-{self.model_name}"
-
-    def train_reward_model(self):
-
-        assert torch.cuda.is_available(), "need CUDA"
-        
-        device_map = "auto"
-
-        # Also want to quantize the reward model
-        
-        # TODO: move this out of the function and into init
-        reward_model = AutoModelForSequenceClassification.from_pretrained(
-            self.model_name,
-            quantization_config=self.config.bnb_config,
-            device_map=device_map,
-            max_memory=self.config.max_memory,
-            dtype=self.config.dtype
-        )
-
-        # Using low-rank adaptation for reward model fine-tuning
-        
+        self.__create_model()
+                        
         peft_config = LoraConfig(
             task_type=TaskType.SEQ_CLS,
             inference_mode=False,
-            
             # Rank or the size of the matrices added to our model
             r=8,
             lora_alpha=32,
@@ -607,41 +433,66 @@ class RewardModel:
         )
 
         training_args = RewardConfig(
-            output_dir=self.checkpoint_dir,
+            output_dir=checkpoint_dir,
             num_train_epochs=3,
             per_device_train_batch_size=REWARD_MODEL_BATCH_SIZE,
             learning_rate=2e-5,
             logging_steps=10,
-            
             # This breaks the trainer
             # fp16=True,
         )
         
         trainer = RewardTrainer(
-            model=reward_model,
+            model=self.model,
             args=training_args,
-            train_dataset=self.dataset,
+            train_dataset=dataset,
             peft_config=peft_config,
         )
 
-        # Print out the memory we have available before training
-        
-        result = trainer.train()
-        
+        result = trainer.train()        
         print("\nTraining GPU memory & other metrics:\n", result)
+        
+        self.accelerator.wait_for_everyone()
 
-        trainer.model.save_pretrained(self.adapter_dir)
-        # trainer.tokenizer.save_pretrained(self.output_dir)
+        if self.accelerator.is_local_main_process:
+            trainer.model.save_pretrained(adapter_dir)
+            trainer.tokenizer.save_pretrained(output_dir)
+            
+    def save_model(self, checkpoint_dir, adapter_dir, output_dir):
+        
+        self.__train_reward_model(checkpoint_dir, adapter_dir, output_dir)
+        
+        with self.accelerator.main_process_first():
 
-        base_model = AutoModelForSequenceClassification.from_pretrained(
-            self.model_name)
-        lora_model = PeftModel.from_pretrained(base_model, self.adapter_dir)
+            base_model = AutoModelForSequenceClassification.from_pretrained(
+                self.model_path)
+            lora_model = PeftModel.from_pretrained(base_model, adapter_dir)
 
         merged_model = lora_model.merge_and_unload()
 
-        merged_model.save_pretrained(self.output_dir)
-        trainer.tokenizer.save_pretrained(self.output_dir)
+        if self.accelerator.is_local_main_process:
+            merged_model.save_pretrained(output_dir)
+
+class RewardModel:
+    def __init__(self, model_loader: AccelerateModelLoader, reward_data: RewardDataset, config):
+
+        # TODO: Probably do something with device here
+        self.dataset = reward_data.get_dataset()
         
+        # Only using the SFT model to get the model name
+        self.model_name = config.base_model_name
+        
+        self.config = config
+        self.model_loader = model_loader
+
+        self.checkpoint_dir = f"./reward-model-constitution-{self.model_name}-checkpoints"
+        self.adapter_dir = f"./reward-model-constitution-{self.model_name}-adapters"
+        self.output_dir = f"./final-reward-model-constitution-{self.model_name}"
+
+    def train_reward_model(self):
+        RewardModelTrainer(self.model_loader).save_model(self.checkpoint_dir, 
+                                                         self.adapter_dir, 
+                                                         self.output_dir)              
 
     def get_reward_model_name(self):
         return self.output_dir
@@ -734,7 +585,7 @@ class GRPOTrainerRLAIF:
 
         print("Inputs IDs", len(enc["input_ids"]))
 
-        with torch.no_grad():
+        with torch.inference_mode():
             # What: get output logits from reward model for input and squeeze to get reward values
             outputs = self.reward_model(**enc)
 
@@ -798,7 +649,7 @@ class GRPOTrainerRLAIF:
         merged_model.save_pretrained(FINAL_MODEL_NAME)
         grpo_trainer.tokenizer.save_pretrained(FINAL_MODEL_NAME)
 
-def grpo_sft_model_with_reward_model(config, model_loader: MultiGPULoader) -> str:
+def grpo_sft_model_with_reward_model(config, model_loader: AccelerateModelLoader) -> str:
     """
     1. Create SFT model
     2. Create reward dataset with SFT model
@@ -810,22 +661,16 @@ def grpo_sft_model_with_reward_model(config, model_loader: MultiGPULoader) -> st
                             constitution_path=config.constitution_path, 
                             num_samples=config.constitutionally_generated_harmlessness_comparisons)
 
-    # TODO: Reward model should be instantiated on existing GPU
-
-    sft_model = SFTModel(config)
-
-    free_cuda_memory()
-
-    reward_model = RewardModel(sft_model, dataset, config)
+    print(dataset.get_dataset())
+    
+    reward_model = RewardModel(model_loader, dataset, config)
     reward_model.train_reward_model()
 
-    free_cuda_memory()
+    # grpo_trainer = GRPOTrainerRLAIF(
+    #     reward_model, sft_model, config)
 
-    grpo_trainer = GRPOTrainerRLAIF(
-        reward_model, sft_model, config)
-
-    # Train sft_model with GRPO and save
-    grpo_trainer.train_and_save_model()
+    # # Train sft_model with GRPO and save
+    # grpo_trainer.train_and_save_model()
     
     return FINAL_MODEL_NAME
 
