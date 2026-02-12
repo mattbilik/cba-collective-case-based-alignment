@@ -160,6 +160,9 @@ class RewardDataset:
         self.dataset = Dataset.from_list(results)
         print(f"Generated {len(self.dataset)} pairs.")
 
+        # NOTE: DELETING MODEL THAT CREATED REWARD DATASET 
+        self.model_loader.delete_model()
+
     def compute_log_prob_response(self, prompt_message, response):
         new_message = prompt_message + \
             [{"role": "assistant", "content": response}]
@@ -322,73 +325,70 @@ class RewardDataset:
 
         return log_prob, chosen_response, rejected_response
 
-    def __generate_dataset(self, log_probs) -> Dataset:
-        """
-        Generating a dataset
-        """
+    # def __generate_dataset(self, log_probs) -> Dataset:
+    #     """
+    #     Generating a dataset
+    #     """
 
-        rows = []
+    #     rows = []
 
-        for prompt, log_prob in log_probs.items():
+    #     for prompt, log_prob in log_probs.items():
 
-            # Printing probability, chosen, and rejected responses
-            print(log_prob)
-            log_prob, chosen_response, rejected_response = log_probs[prompt]
+    #         # Printing probability, chosen, and rejected responses
+    #         print(log_prob)
+    #         log_prob, chosen_response, rejected_response = log_probs[prompt]
 
-            # Cannot use chat template with this model
-            # prompt = [{"role": "user", "content": prompt}]
-            # chosen_response = [{"role": "assistant", "content": chosen_response}]
-            # rejected_response = [{"role": "assistant", "content": rejected_response}]
+    #         # Cannot use chat template with this model
+    #         # prompt = [{"role": "user", "content": prompt}]
+    #         # chosen_response = [{"role": "assistant", "content": chosen_response}]
+    #         # rejected_response = [{"role": "assistant", "content": rejected_response}]
 
-            rows.append({
-                "prompt": prompt,
-                "chosen": chosen_response,
-                "rejected": rejected_response,
-                "margin": log_prob
-            })
+    #         rows.append({
+    #             "prompt": prompt,
+    #             "chosen": chosen_response,
+    #             "rejected": rejected_response,
+    #             "margin": log_prob
+    #         })
 
-        dataset = Dataset.from_list(rows)
-        self.dataset = dataset
+    #     dataset = Dataset.from_list(rows)
+    #     self.dataset = dataset
         
-        # NOTE: DELETING MODEL THAT CREATED REWARD DATASET 
-        self.model_loader.delete_model()
+    # def __generate_completions_and_scores(self):
+    #     """
+    #     Generate response pairs and scores for RLAIF training
+    #     1. For each prompt, generate two responses using the SFT model.
+    #     2. Randomly select a constitutional principle.
+    #     3. Compute log probabilities that one response is better aligned than the other.
+    #     4. Store the results (the logs) in a dataset for reward model training.
+    #     """
 
-    def __generate_completions_and_scores(self):
-        """
-        Generate response pairs and scores for RLAIF training
-        1. For each prompt, generate two responses using the SFT model.
-        2. Randomly select a constitutional principle.
-        3. Compute log probabilities that one response is better aligned than the other.
-        4. Store the results (the logs) in a dataset for reward model training.
-        """
+    #     log_probs = {}
+    #     prompt_idx = 0
 
-        log_probs = {}
-        prompt_idx = 0
-
-        for batch in tqdm(self.prompt_iterator):
+    #     for batch in tqdm(self.prompt_iterator):
             
-            # Getting batches of 4:
+    #         # Getting batches of 4:
 
-            prompt_idx += 1
+    #         prompt_idx += 1
 
-            if prompt_idx > self.num_samples:
-                break
+    #         if prompt_idx > self.num_samples:
+    #             break
 
-            # Want the full, unformatted conversation (multi-turn)
-            prompt = batch['prompt'][0]
+    #         # Want the full, unformatted conversation (multi-turn)
+    #         prompt = batch['prompt'][0]
 
-            resp_1, resp_2 = self.__generate_response_pairs(prompt)
-            principle = random.choice(self.constitution['principles'])
+    #         resp_1, resp_2 = self.__generate_response_pairs(prompt)
+    #         principle = random.choice(self.constitution['principles'])
 
-            # Compute log probabilities for response A and response B
-            log_prob, chosen_response, rejected_response = self.__generate_log_probs(
-                prompt, principle, resp_1, resp_2)
-            log_probs[prompt] = [log_prob, chosen_response, rejected_response]
+    #         # Compute log probabilities for response A and response B
+    #         log_prob, chosen_response, rejected_response = self.__generate_log_probs(
+    #             prompt, principle, resp_1, resp_2)
+    #         log_probs[prompt] = [log_prob, chosen_response, rejected_response]
             
-        # Move SFT model back to CPU to free up GPU memory
-        # self.SFT_model.move_to_cpu()
+    #     # Move SFT model back to CPU to free up GPU memory
+    #     # self.SFT_model.move_to_cpu()
 
-        self.__generate_dataset(log_probs)
+    #     self.__generate_dataset(log_probs)
 
     def get_dataset(self):
         return self.dataset
