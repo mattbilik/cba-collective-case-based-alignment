@@ -12,12 +12,130 @@ import torch
 import heapq
 import gc
 
+from torch.nn.utils.rnn import pad_sequence
+
 load_dotenv()
 
 CASE_REGIME = "constitution"
 _MODEL_CACHE = {}
 
-def get_all_turns_from_hh_anthropic(dialogue: str) -> list[str, str]:
+# def get_all_turns_from_hh_anthropic(dialogue: str) -> list[str, str]:
+
+#     # Extract all human and assistant responses as list pairs
+#     dialogue_pairs = []
+#     dialogue = dialogue.split('\n\n')
+        
+#     for i in range(0, len(dialogue) - 1, 1):
+#         if dialogue[i].startswith('Human:'):
+#             human_response = dialogue[i].partition('Human:')[2].strip()
+#             dialogue_pairs.append({'role': 'user', 'content': human_response})
+#         elif dialogue[i].startswith('Assistant:'):
+#             assistant_response = dialogue[i].partition('Assistant:')[2].strip()
+            
+#             if assistant_response != '':
+#                 dialogue_pairs.append({'role': 'assistant', 'content': assistant_response})
+
+#     # print(f"DIALOGUE PAIRS: {dialogue_pairs}")
+#     return dialogue_pairs
+
+def format_conversation_as_text(self, conversation_history):
+    """Format conversation without special tokens"""
+    lines = []
+    for turn in conversation_history:
+        role_label = {
+            'system': 'System',
+            'user': 'User', 
+            'assistant': 'Assistant'
+        }.get(turn['role'], turn['role'].capitalize())           
+
+    lines.append(f"{role_label}: {turn['content']}")
+        
+    return "\n\n".join(lines)
+
+def get_completion(input_ids,
+                    attention_mask,
+                    model,
+                    accelerator,
+                    tokenizer,
+                    max_new_tokens=200):
+        
+    input_ids.to(accelerator.device)
+    prompt_lengths = attention_mask.sum(dim=1)
+    
+    with torch.inference_mode():    
+        output = model.generate(
+             input_ids,
+             max_new_tokens=max_new_tokens,
+             do_sample=True,
+             temperature=1.0,
+             pad_token_id=tokenizer.pad_token_id or tokenizer.eos_token_id
+        )
+        
+    responses = []
+    
+    for i, length in enumerate(prompt_lengths):
+        response = output[i][length:]
+        responses.append(response)
+    
+    responses = pad_sequence(responses, batch_first=True, 
+                             padding_value=tokenizer.pad_token_id)
+    
+    responses = tokenizer.decode(responses)
+            
+    return responses
+
+# def revise_responses_on_constitutions_case_based(model,
+#                                                  tokenizer,
+#                                                  batch,
+#                                                  number_of_revisions = 4) -> str:
+              
+#     revision_instructions = random.choice(self.constitution['principles'])
+#     random_principle = revision_instructions['description']
+        
+#     initial_completion = self.__get_mistral_completion_multiturn(
+#         harmfulness_prompt_history)
+       
+#     completion_to_revise = initial_completion.strip() 
+#     cases = revision_instructions['cases']
+#     case_embeddings = revision_instructions['case_embeddings']
+                 
+#     embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
+#     with torch.inference_mode():
+#         prompt_embedding = embedding_model.encode(harmfulness_prompt)
+    
+#     cosine_scores = st_util.cos_sim(prompt_embedding, case_embeddings)[0]
+#     k = 3
+#     top_k_indices = heapq.nlargest(k, range(len(cosine_scores)), key=lambda i: cosine_scores[i])
+
+#     print(f"Top {k} most similar sentences to the query: '{harmfulness_prompt}'")
+                
+#     top_k_cases = ""
+#     for i in top_k_indices:
+#        print(f"* Score: {cosine_scores[i]:.4f} - Sentence: '{cases[i]}'")
+#        top_k_cases += f"{cases[i]['case']}\n"
+
+#     # Ideally, we want to select the cases that best match the current harmfulness_prompt
+#     # random_case = random.choice(revision_instructions['cases'])['case']               
+                            
+#     revision_prompt = f"""The following is an original response to a user prompt, followed by a revision instruction.
+#         Please revise the original response according to the revision instruction and output only the revised response as plain text.
+            
+#         User prompt: {harmfulness_prompt}
+#         Original response: {completion_to_revise}
+#         Revision principle: {random_principle}
+#         Revision cases: {top_k_cases}
+#         Revised response:"""
+
+def get_all_turns_and_format(dialogue: str) -> list[str, str]:
+    
+    """
+    Docstring for get_all_turns_and_format
+    
+    :param dialogue: the string dialogue we want to convert into HF conversation format
+    :type dialogue: str
+    :return: Description
+    :rtype: list[str]
+    """
 
     # Extract all human and assistant responses as list pairs
     dialogue_pairs = []
@@ -36,107 +154,55 @@ def get_all_turns_from_hh_anthropic(dialogue: str) -> list[str, str]:
     # print(f"DIALOGUE PAIRS: {dialogue_pairs}")
     return dialogue_pairs
 
-def __format_conversation_as_text(self, conversation_history):
-    """Format conversation without special tokens"""
-    lines = []
-    for turn in conversation_history:
-        role_label = {
-            'system': 'System',
-            'user': 'User', 
-            'assistant': 'Assistant'
-        }.get(turn['role'], turn['role'].capitalize())           
+def tokenize_chat_history(batch_prompts,
+                          tokenizer):
+    """
+    Initial tokenization for first prompt
+    
+    :param batch: the prompts that we want to generate initial completions for
+    """
+    
+    batch_chats = []
+    
+    for batch_prompt in batch_prompts:
+        chat_for_one_prompt = get_all_turns_and_format(batch_prompt)
+        batch_chats.append(chat_for_one_prompt)
+    
+    batch_chats = tokenizer.apply_chat_template(batch_chats, tokenize=True)    
+    
+    return batch_chats
 
-    lines.append(f"{role_label}: {turn['content']}")
-        
-    return "\n\n".join(lines)
+def tokenize_revision_request(batch_prompts, 
+                              principle, 
+                              batch_responses,
+                              tokenizer):
+    """
+    Tokenize the initial revision request
+    :param batch_prompts: the prompts that we are generating revisions for with critiques
+    :param principle: the principles with which we are generating critiques
+    :param batch_responses: responses that we want to critique
+    
+    :return the tokenized revision request
+    """
 
-def __get_mistral_completion(batch,
-                             model,
-                             tokenizer,
-                             accelerator,
-                             tokenize=True,
-                             system_prompt='You are a helpful assistant.',
-                             max_new_tokens=200):
+    revision_requests = []
+    for i, batch_prompt in enumerate(batch_prompts):
         
-    # Load model once and cache it
-    if tokenize:
-        full_conversation = [
-            {'role': 'system', 'content': system_prompt},
-            *conversation_history,
+        batch_response = batch_responses[i]
+        revision_request = f"""The following is an original response to a user prompt, followed by a revision instruction.\nPlease revise the original response according to the revision instruction and output ONLY your revised response (which must answer the question in the prompt history) as plain text. DO NOT mention the revision instruction in your response. \nUser prompt history: {batch_prompt}\nOriginal response: {batch_response}\nRevision principle: {principle}\nRevised response:"""
+        
+        chat = [
+            {"role": "user", "content": revision_request}
         ]
         
-        batch = tokenizer.apply_chat_template(
-            full_conversation,
-            tokenize=True,
-            add_generation_prompt=True,
-            return_tensors="pt"
-        ).to(accelerator.device)
-    with torch.inference_mode():    
-        output = model.generate(
-             batch,
-             max_new_tokens=max_new_tokens,
-             # do_sample=True,
-             temperature=1.0,
-             pad_token_id=tokenizer.pad_token_id or tokenizer.eos_token_id
-        )
+        revision_requests.append(chat)
         
-    input_length = inputs.shape[1]
-    response = tokenizer.decode(output[0][input_length:], skip_special_tokens=True)
-        
-    # Clear intermediate tensors (but keep model loaded)
-    # I think these dels should be unecessary? 
-#    del inputs
-#    del output
- #   if torch.cuda.is_available():
-  #      torch.cuda.empty_cache()
-  #  gc.collect()
-        
-    return response.strip()
+    revision_requests = tokenizer.apply_chat_template(revision_requests, tokenize=True)    
 
-def revise_responses_on_constitutions_case_based(model,
-                                                 tokenizer,
-                                                 batch,
-                                                 number_of_revisions = 4) -> str:
-              
-    revision_instructions = random.choice(self.constitution['principles'])
-    random_principle = revision_instructions['description']
-        
-    initial_completion = self.__get_mistral_completion_multiturn(
-        harmfulness_prompt_history)
-       
-    completion_to_revise = initial_completion.strip() 
-    cases = revision_instructions['cases']
-    case_embeddings = revision_instructions['case_embeddings']
-                 
-    embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
-    with torch.inference_mode():
-        prompt_embedding = embedding_model.encode(harmfulness_prompt)
-    
-    cosine_scores = st_util.cos_sim(prompt_embedding, case_embeddings)[0]
-    k = 3
-    top_k_indices = heapq.nlargest(k, range(len(cosine_scores)), key=lambda i: cosine_scores[i])
-
-    print(f"Top {k} most similar sentences to the query: '{harmfulness_prompt}'")
-                
-    top_k_cases = ""
-    for i in top_k_indices:
-       print(f"* Score: {cosine_scores[i]:.4f} - Sentence: '{cases[i]}'")
-       top_k_cases += f"{cases[i]['case']}\n"
-
-    # Ideally, we want to select the cases that best match the current harmfulness_prompt
-    # random_case = random.choice(revision_instructions['cases'])['case']               
-                            
-    revision_prompt = f"""The following is an original response to a user prompt, followed by a revision instruction.
-        Please revise the original response according to the revision instruction and output only the revised response as plain text.
-            
-        User prompt: {harmfulness_prompt}
-        Original response: {completion_to_revise}
-        Revision principle: {random_principle}
-        Revision cases: {top_k_cases}
-        Revised response:"""
+    return revision_requests
 
 #THIS FUNCTION NEEDS TO BE UPDATED TO HANDLE BATCHES!!
-def revise_responses_on_constitution(batch,
+def revise_responses_on_constitution(batch_prompts,
                                      model,
                                      tokenizer,
                                      accelerator,
@@ -155,10 +221,15 @@ def revise_responses_on_constitution(batch,
     revision_instructions = random.choice(constitution['principles'])
     random_principle = revision_instructions['description']
         
-    initial_completion = __get_mistral_completion(
-        batch, model, tokenizer, accelerator, tokenize=False)
+    tokenized_batch_prompts = tokenize_chat_history(batch_prompts, tokenizer)
+    
+    input_ids = tokenized_batch_prompts['input_ids']
+    attention_mask = tokenized_batch_prompts['attention_mask']
+    
+    initial_completions = get_completion(
+        input_ids, attention_mask, model, accelerator)
        
-    completion_to_revise = initial_completion.strip() 
+    responses_to_revise = initial_completions
     
     """
     User: lorem ipsum
@@ -170,38 +241,49 @@ def revise_responses_on_constitution(batch,
             
     """
         
-    formatted_chat_string = self.__format_conversation_as_text(harmfulness_prompt_history)
+    # formatted_chat_string = format_conversation_as_text(harmfulness_prompt_history)
 
-    for _ in range(number_of_revisions):            
-        if CASE_REGIME == "constitution":
-            revision_prompt = f"""The following is an original response to a user prompt, followed by a revision instruction.\nPlease revise the original response according to the revision instruction and output ONLY your revised response (which must answer the question in the prompt history) as plain text. DO NOT mention the revision instruction in your response. \nUser prompt history: {formatted_chat_string}\nOriginal response: {completion_to_revise}\nRevision principle: {random_principle}\nRevised response:"""
+    # NOTE: this is doing revisions
+    for _ in range(number_of_revisions):      
+              
+        # revision_prompt = f"""The following is an original response to a user prompt, followed by a revision instruction.\nPlease revise the original response according to the revision instruction and output ONLY your revised response (which must answer the question in the prompt history) as plain text. DO NOT mention the revision instruction in your response. \nUser prompt history: {formatted_chat_string}\nOriginal response: {completion_to_revise}\nRevision principle: {random_principle}\nRevised response:"""
                     
-
         # Add the new prompt to the conversation history
         # harmfulness_prompt_history.append({
         #     'role': 'user',
         #     'content': revision_prompt
         # })
             
-        revision_prompt = [
-            {'role': 'user', 'content': revision_prompt}
-        ]
+        # revision_prompt = [
+        #     {'role': 'user', 'content': revision_prompt}
+        # ]
+        
+        tokenized_revision_prompt = tokenize_revision_request(batch_prompts, 
+                                                            random_principle, 
+                                                            responses_to_revise,
+                                                            tokenizer)
 
-        revised_response = self.__get_mistral_completion(
-            revision_prompt, model, tokenizer, accelerator), tokenize=True
+        revision_prompt_input_ids = tokenized_revision_prompt['input_ids']
+        revision_prompt_attention_mask = tokenized_revision_prompt['attention_mask']
+
+        revised_responses = get_completion(
+                revision_prompt_input_ids,
+                revision_prompt_attention_mask,
+                model,
+                accelerator,
+                tokenizer
+            )
            
-        completion_to_revise = revised_response.strip()
+        responses_to_revise = revised_responses
             
-        # completion_to_revise = tokenizer.apply_chat_template(completion_to_revise, tokenize=False, add_generation_prompt=True)
+    return responses_to_revise
 
-    return completion_to_revise
+def run_generation(prompt_iterator, tokenizer, model, accelerator, constitution):
 
-
-def run_generation(generation_cfg, prompt_iterator, tokenizer, model, accelerator, constitution):
-
-    model, dataloader = accelerator.prepare(model, prompt_iterator)
+    model, prompt_iterator = accelerator.prepare(model, prompt_iterator)
     unwrapped_model = accelerator.unwrap_model(model)
     accelerator.wait_for_everyone()
+    
     responses = []
     prompt_idx = 0
 
@@ -209,17 +291,32 @@ def run_generation(generation_cfg, prompt_iterator, tokenizer, model, accelerato
         prompt_idx += 1
         print(f' Processing batch: {prompt_idx}')
         print(f'prompt_idx: {prompt_idx}')
+        
 
         final_completion = revise_responses_on_constitution(batch,
             unwrapped_model, tokenizer, accelerator, constitution, number_of_revisions=4)
         final_completion = accelerator.gather_for_metrics(final_completion)
+        
         responses.extend(final_completion)
+        
     return responses
+
+def prompt_from_hh_anthropic(instruction):
+    # Extract the first human prompt before the assistant response to make all data 1-turn (e.g. "Hi, I want to learn to play horseshoes. Can you teach me?")
+    relevant_instruction = instruction.partition(
+        '\n\nAssistant:')[0].partition('Human:')[2].strip()
+    return relevant_instruction
+
+def dump_files(responses, base_output_dir):
+    with open(os.path.join(base_output_dir, f'hh_anthropic_1turn_df_completions_many.json'), 'w+') as f:
+        json.dump(responses, f, indent=2)
+    print('Saved to file')
 
 def create_revisions(model_name: str = 'Qwen/Qwen2-7B',
                      constitution_path: str = 'constitution.json'):
     
     #need to expand this out into different sections?
+    
     args = {
         # This magic number is from the Anthropic CAI paper
         # "num_completions": 182831,
@@ -258,21 +355,17 @@ def create_revisions(model_name: str = 'Qwen/Qwen2-7B',
     # tokenizer = AutoTokenizer.from_pretrained(
     #     'Qwen/Qwen2-1.5B')
 
-    def prompt_from_hh_anthropic(instruction):
-        # Extract the first human prompt before the assistant response to make all data 1-turn (e.g. "Hi, I want to learn to play horseshoes. Can you teach me?")
-        relevant_instruction = instruction.partition(
-            '\n\nAssistant:')[0].partition('Human:')[2].strip()
-        return relevant_instruction
-
     accelerator = Accelerator()
+    
     with accelerator.main_process_first():
         tokenizer = AutoTokenizer.from_pretrained(model_name)
         tokenizer.pad_token_id = tokenizer.eos_token_id
         model = AutoModelForCausalLM.from_pretrained(
-                    self.model_name,
+                    model_name,
                     dtype=torch.float16,
                     device_map="auto"
                 )
+        
         # Processing helpfulness, harmfulness dataset from Anthropic
         # note: does this need to be a DataLoader?
         prompt_iterator = get_batch_iterator(['hh'],
@@ -295,16 +388,16 @@ def create_revisions(model_name: str = 'Qwen/Qwen2-7B',
                                              text_preprocessing_func = prompt_from_hh_anthropic
         )
 
-    def _dump_files(responses):
-        with open(os.path.join(args["base_output_dir"], f'hh_anthropic_1turn_df{args["data_fraction"]}_ff{args["ff"]}_{args["ai_model"]}_completions_many.json'), 'w+') as f:
-            json.dump(responses, f, indent=2)
-        print('Saved to file')
 
-    responses = run_generation(generation_cfg, prompt_iterator, tokenizer, model, accelerator, constitution)     
+    # NOTE: these are the final responses
+    final_responses = run_generation(prompt_iterator, tokenizer, model, accelerator, constitution)     
+    
+    dump_files(final_responses, args['base_output_dir'])
+    
     accelerator.wait_for_everyone()
 
     if accelerator.is_local_main_process:
-        _dump_files(responses)
+        dump_files(final_responses, args['base_output_dir'])
     
 if __name__ == "__main__":
     create_revisions()
