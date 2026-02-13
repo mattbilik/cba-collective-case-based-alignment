@@ -144,6 +144,8 @@ class RewardDataset:
             log_prob, chosen_response, rejected_response = self.__generate_log_probs(
                 prompt, principle, resp_1, resp_2)
 
+
+            # NOTE: Decision made out of convenience? is there another way to do this
             return {
                 "prompt": prompt,
                 "chosen": chosen_response,

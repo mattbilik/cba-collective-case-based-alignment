@@ -1,5 +1,5 @@
 import torch
-from accelerate import ModelConfigSmall, AccelerateModelLoader
+from accelerate_local import ModelConfigSmall, AccelerateModelLoader
 
 from ai_completions_hf_model_anthropic import create_revisions
 from create_sft_model import finetune_and_merge_weights

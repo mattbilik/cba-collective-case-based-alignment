@@ -132,7 +132,7 @@ class AccelerateModelLoader(Model):
         inputs = self.tokenizer("You are a helpful assistant. " + prompt, return_tensors="pt")
         
         with torch.inference_mode():
-            generated_tokens = self.model.generate(**inputs, max_new_tokens=100, temperature=1.5, do_sample=True)
+            generated_tokens = self.model.module.generate(**inputs, max_new_tokens=100, temperature=1.5, do_sample=True)
 
             generated_tokens = self.accelerator.pad_across_processes(
                 generated_tokens, dim=1, pad_index=self.tokenizer.pad_token_id)
