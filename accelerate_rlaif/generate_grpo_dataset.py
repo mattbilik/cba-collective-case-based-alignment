@@ -3,6 +3,8 @@ import json
 import random
 import os
 import torch
+from torch.nn.utils.rnn import pad_sequence
+
 from tqdm import tqdm
 import sys
 
@@ -103,7 +105,8 @@ class RewardDataset:
                                     batch_prompts,
                                     principle,
                                     responses_1,
-                                    responses_2):
+                                    responses_2,
+                                    selected_response):
         
         tokenized_preference_pairs = []
         
@@ -122,7 +125,8 @@ class RewardDataset:
             """
             
             chat = [
-                {"role": "user", "content": prompt}
+                {"role": "user", "content": prompt},
+                {"role": "assistant", "content": selected_response}
             ]
             
             tokenized_preference_pairs.append(chat)
@@ -160,13 +164,17 @@ class RewardDataset:
         # Answer with only a number between 0 and 1. Do not include any additional text.
         # """
         
-        tokenized_preference_pairs = self.__tokenize_preference_pairs(response_prompts,
-                                                                      principle,
-                                                                      responses_1,
-                                                                      responses_2)
-
-        log_probs_1 = self.compute_log_prob_response(tokenized_preference_pairs, "(A)")
-        log_probs_2 = self.compute_log_prob_response(tokenized_preference_pairs, "(B)")
+        log_probs_1 = self.compute_log_prob_response(response_prompts,
+                                                     principle,
+                                                     responses_1,
+                                                     responses_2, 
+                                                     "(A)")
+        
+        log_probs_2 = self.compute_log_prob_response(response_prompts,
+                                                     principle,
+                                                     responses_1,
+                                                     responses_2, 
+                                                     "(B)")
 
         # TODO: Turn log probability into real probabilites
         # Learn the probability of A over the probability of B -- train to the probability targets
@@ -182,18 +190,20 @@ class RewardDataset:
 
         return log_prob, chosen_response, rejected_response
 
-    def compute_log_prob_response(self, prompt_message, response):
-        new_message = prompt_message + \
-            [{"role": "assistant", "content": response}]
+    def compute_log_prob_response(self, 
+                                  prompt_messages,
+                                  principle,
+                                  responses_1,
+                                  responses_2,
+                                  selected_response):
+        
+        tokenized_preference_pairs = self.__tokenize_preference_pairs(prompt_messages,
+                                                                principle,
+                                                                responses_1,
+                                                                responses_2,
+                                                                selected_response)
 
-        inputs = self.tokenizer.apply_chat_template(
-            new_message,
-            tokenize=True,
-            add_generation_prompt=True,
-            return_tensors="pt"
-        )
-
-        prompt_len = len(inputs)
+        # prompt_len = len(inputs)
 
         # E.g.
 
@@ -208,51 +218,69 @@ class RewardDataset:
 
         # Response
         # (B)
-
+        
         # Qwen, make sure to return BatchEncoding-like object
         if isinstance(inputs, torch.Tensor):
-            input_ids = inputs
-            attention_mask = torch.ones_like(input_ids)
-
             inputs = {
-                "input_ids": input_ids,
-                "attention_mask": attention_mask
+                "input_ids": tokenized_preference_pairs['input_ids'],
+                "attention_mask": tokenized_preference_pairs['attention_mask']
             }
 
-        labels = inputs["input_ids"].clone()
+        all_batch_labels = inputs["input_ids"].clone()
+                
+        for i, batch_label in enumerate(all_batch_labels):
+            
+            prompt_length = inputs["attention_mask"][i].sum(dim=1)
+            
+            # Ignore all prompt tokens (only interested in A or B log prob)
+            # I.e. mask everything up to prompt_length
+            
+            # For this particular batch
+            batch_label[:prompt_length] = -100
 
-        # Ignore all prompt tokens (only interested in A or B log prob)
-        labels[:, :prompt_len] = -100  # ignore index for masking prompt
-
-        # NOTE: commented out b/c accelerate
-        # # Move to first layer device (for multi-GPU setups)
-        # device = next(self.SFT_model.model.parameters()).device
-
-        # inputs['input_ids'] = inputs['input_ids'].to(device)
-        # inputs['attention_mask'] = inputs['attention_mask'].to(device)
-        # labels.to(device)
+        # NOTE: Don't need to pad batch_labels because just changing value to ignore
 
         # We want to use the SFT model to compute the log probabilities of the responses
-        outputs = self.SFT_model.get_outputs(**input_strings, labels=labels)
+        # outputs = self.SFT_model.get_outputs(**input_strings, labels=labels)
         
         with torch.inference_mode():
-            outputs = self.SFT_model.get_model()(
+            outputs = self.model(
                 input_ids=inputs["input_ids"],
                 attention_mask=inputs["attention_mask"],
-                labels=labels
+                labels=all_batch_labels
             )
 
-        # The first predicted token is the one after the prompt
-        response_start_index = prompt_len - 1
-        # Exclude the last logit as it's for predicting a token after the response
-        response_logits = outputs.logits[:, response_start_index:-1, :]
-        response_token_ids = inputs["input_ids"][:, prompt_len:]
+        log_probs = []
+        for i, output in enumerate(outputs):
+            
+            response_start_index = inputs["attention_mask"][i].sum(dim=1) - 1
+            
+            response_logits = output.logits[response_start_index:-1, :]
+            
+            # Get response tokens from output
+            prompt_length = inputs["attention_mask"][i].sum(dim=1)
+            response_token_ids = inputs["input_ids"][i][prompt_length:]
+            
+            log_probs = torch.log_softmax(response_logits, dim=-1)
+            
+            selected_log_probs = torch.gather(
+                log_probs, -1, response_token_ids.unsqueeze(-1)).squeeze(-1)
+            
+            log_probs.append(selected_log_probs.sum().item())
 
-        # Log probabilities of "(" and "A" and ")" or "(" and "B" and ")" or some kind of tokenization thereof
-        log_probs = torch.log_softmax(response_logits, dim=-1)
-        selected_log_probs = torch.gather(
-            log_probs, -1, response_token_ids.unsqueeze(-1)).squeeze(-1)
-        return selected_log_probs.sum().item()
+        return log_probs
+
+        # # The first predicted token is the one after the prompt
+        # response_start_index = prompt_len - 1
+        # # Exclude the last logit as it's for predicting a token after the response
+        # response_logits = outputs.logits[:, response_start_index:-1, :]
+        # response_token_ids = inputs["input_ids"][:, prompt_len:]
+
+        # # Log probabilities of "(" and "A" and ")" or "(" and "B" and ")" or some kind of tokenization thereof
+        # log_probs = torch.log_softmax(response_logits, dim=-1)
+        # selected_log_probs = torch.gather(
+        #     log_probs, -1, response_token_ids.unsqueeze(-1)).squeeze(-1)
+        # return selected_log_probs.sum().item()
 
     def get_dataset(self):
         return self.dataset
