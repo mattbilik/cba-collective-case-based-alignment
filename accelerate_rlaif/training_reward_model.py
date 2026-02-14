@@ -5,7 +5,7 @@ from transformers import AutoModelForSequenceClassification
 from trl import RewardTrainer, RewardConfig
 
 import time
-from load_data_funcs import load_test_data, load_dataset_from_path
+from helpers.load_data_funcs import load_test_data, load_dataset_from_path
 
 BASE_MODEL = "Qwen/Qwen2-0.5B"
 

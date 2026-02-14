@@ -4,6 +4,7 @@ import random
 import os
 import torch
 from tqdm import tqdm
+import sys
 
 from datasets import Dataset
 from preference_datasets import get_batch_iterator
@@ -13,84 +14,128 @@ import time
 from accelerate import Accelerator
 from accelerate.parallelism_config import ParallelismConfig
 
-from load_data_funcs import load_test_data, load_dataset_from_path
+from transformers import AutoTokenizer, AutoModelForCausalLM
+
+from helpers.model_funcs import get_completions
 
 BASE_MODEL = "Qwen/Qwen2-0.5B"
 
 class RewardDataset:
-    def __init__(self, config, tokenizer):
+    def __init__(self, 
+                 sft_model: str, 
+                 constitution_path: str,
+                 constitutionally_generated_harmlessness_comparisons: int):
 
-        constitution_path = config.constitution_path
+        self.tokenizer = AutoTokenizer.from_pretrained(
+            sft_model
+        )
+        
+        self.model = AutoModelForCausalLM.from_pretrained(sft_model)
+        
+        self.tokenizer.pad_token_id = self.tokenizer.eos_token_id
 
         with open(constitution_path, 'r') as f:
             self.constitution = json.load(f)
             
-        self.num_samples = config.constitutionally_generated_harmlessness_comparisons
-
-        self.tokenizer = model_loader.get_tokenizer()
-        self.tokenizer.pad_token_id = self.tokenizer.eos_token_id
+        self.num_samples = constitutionally_generated_harmlessness_comparisons
         
-        self.prompt_iterator = get_batch_iterator(['hh'], tokenizer=self.tokenizer, split='train', batch_size=1, sft_mode=True,
+        self.prompt_iterator = get_batch_iterator(['hh'], tokenizer=self.tokenizer, split='train', batch_size=4, sft_mode=True,
                                                   seed=0, n_epochs=1, cache_dir=os.getenv("PROJECT_CACHE", "~/.cache"), shuffle=False,
                                                   max_prompt_length=256, max_length=512,
                                                   num_turns=1, data_fraction=1, prefs_path=None, sampled_data_dir=None)
 
         self.__generate_completions_and_scores()
-
-    def __generate_completions_and_scores(self):
-        """
-        Parallelized generation using accelerate
-        """
-        prompts_to_process = []
-
-        # 1. Extract prompts from the iterator
-        # (Assuming the iterator is still sync, we pull prompts into a list)
-        for batch in self.prompt_iterator:
-            prompts_to_process.extend(batch['prompt'])
-            if len(prompts_to_process) >= self.num_samples:
-                prompts_to_process = prompts_to_process[:self.num_samples]
-                break
+        
+    def tokenize_batches(self, prompt_batches):
+        
+        tokenized_batches = []
+        for prompt_batch in prompt_batches:
             
-        def process_single_prompt(prompt, principle):
-            # This logic runs inside a thread on a specific GPU
-            # Note: We pass the specific model/tokenizer from the pool
+            chat = [
+                {"role": "user", "content": prompt_batch}
+            ]
             
-            # Helper for local generation
+            tokenized_batches.apppend(chat)
+                
+        tokenized_batches = self.tokenizer.apply_chat_template(tokenized_batches, 
+                                                               tokenize=True)    
+        
+        return tokenized_batches
+
+    def process_prompt_batches(self, prompt_batch, principle):
+        tokenized_batches = self.tokenize_batches(prompt_batch)
+
+        input_ids = tokenized_batches['input_ids']            
+        attention_mask = tokenized_batches['attention_mask']
+        
+        # NOTE: 4 responses per batch, need to be paired
+        responses_1 = get_completions(input_ids,
+                                attention_mask,
+                                self.model,
+                                self.accelerator,
+                                self.tokenizer,
+                                temperature=1.5)
+        
+        responses_2 = get_completions(input_ids,
+                                attention_mask,
+                                self.model,
+                                self.accelerator,
+                                self.tokenizer,
+                                temperature=1.5)
+
+        principle = random.choice(self.constitution['principles'])
+
+        # Compute log probabilities for response A and response B
+        log_prob, chosen_response, rejected_response = self.__generate_log_probs(prompt_batch, 
+                                                                                 principle, 
+                                                                                 responses_1, 
+                                                                                 responses_2)
+
+        # NOTE: Decision made out of convenience? is there another way to do this
+        return {
+            "prompt": prompt,
+            "chosen": chosen_response,
+            "rejected": rejected_response,
+            "margin": log_prob 
+        }
+
+    def __tokenize_preference_pairs(self,
+                                    batch_prompts,
+                                    principle,
+                                    responses_1,
+                                    responses_2):
+        
+        tokenized_preference_pairs = []
+        
+        for i, batch_prompt in enumerate(batch_prompts):
+            response_1 = responses_1[i]
+            response_2 = responses_2[i]
             
-            # def get_resp(p):
-            #     inputs = tokenizer("You are a helpful assistant. " + p, return_tensors="pt").to(device)
-            #     out = model.generate(**inputs, max_new_tokens=100, temperature=1.5, do_sample=True)
-            #     return tokenizer.decode(out[0], skip_special_tokens=True)
+            prompt = f"""
+                Consider the following conversation between a human and an assistant: 
+                {batch_prompt} 
+                {principle} 
+                Options: 
+                    (A) {response_1}
+                    (B) {response_2} 
+                The answer is:
+            """
+            
+            chat = [
+                {"role": "user", "content": prompt}
+            ]
+            
+            tokenized_preference_pairs.append(chat)
+        
+        tokenized_preference_pairs = self.tokenizer.apply_chat_template(tokenized_preference_pairs, tokenize=True)    
+        
+        return tokenized_preference_pairs
 
-            resp_1 = self.model_loader.generate_text(prompt)
-            resp_2 = self.model_loader.generate_text(prompt)
-
-            principle = random.choice(self.constitution['principles'])
-
-            # Compute log probabilities for response A and response B
-            log_prob, chosen_response, rejected_response = self.__generate_log_probs(
-                prompt, principle, resp_1, resp_2)
-
-
-            # NOTE: Decision made out of convenience? is there another way to do this
-            return {
-                "prompt": prompt,
-                "chosen": chosen_response,
-                "rejected": rejected_response,
-                "margin": log_prob 
-            }
-
-        results = []
-        for prompt in prompts_to_process:
-            principle = random.choice(self.constitution['principles'])
-            result = process_single_prompt(prompt, principle)
-            results.append(result)           
-             
-        self.dataset = Dataset.from_list(results)
-        print(f"Generated {len(self.dataset)} pairs.")
-
-    def __generate_log_probs(self, response_prompt, principle,
-                             response_1, response_2) -> float:
+    def __generate_log_probs(self, 
+                             response_prompts, 
+                             principle,
+                             responses_1, 
+                             responses_2) -> float:
         """
         We then compute the log probability of the responses (A) and (B), 
         and we make a labeled, preference modeling comparison example with the 
@@ -114,25 +159,14 @@ class RewardDataset:
 
         # Answer with only a number between 0 and 1. Do not include any additional text.
         # """
+        
+        tokenized_preference_pairs = self.__tokenize_preference_pairs(response_prompts,
+                                                                      principle,
+                                                                      responses_1,
+                                                                      responses_2)
 
-        prompt = f"""
-        Consider the following conversation between a human and an assistant: 
-        {response_prompt} 
-        {principle} 
-        Options: 
-            (A) {response_1}
-            (B) {response_2} 
-        The answer is:
-        """
-
-        # Convert the prompt into a conversation format
-        prompt_message = [
-            {"role": "system", "content": "You are a helpful assistant."},
-            {"role": "user", "content": prompt},
-        ]
-
-        log_prob_1 = self.compute_log_prob_response(prompt_message, "(A)")
-        log_prob_2 = self.compute_log_prob_response(prompt_message, "(B)")
+        log_probs_1 = self.compute_log_prob_response(tokenized_preference_pairs, "(A)")
+        log_probs_2 = self.compute_log_prob_response(tokenized_preference_pairs, "(B)")
 
         # TODO: Turn log probability into real probabilites
         # Learn the probability of A over the probability of B -- train to the probability targets
@@ -226,9 +260,11 @@ class RewardDataset:
 
 if __name__ == '__main__':
     
-    start_time = time.time()
+    start_time = time.time()    
+    sft_model_path_or_name = sys.argv[3]
     
-    dataset = RewardDataset()
+    dataset = RewardDataset(sft_model_path_or_name)
+    
     print(dataset.get_dataset())
     
     print(f"Time difference: {(time.time() - start_time) / 60} minutes")

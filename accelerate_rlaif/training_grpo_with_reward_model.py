@@ -6,7 +6,7 @@ from datasets import Dataset
 
 import time
 
-from load_data_funcs import load_test_data, load_dataset_from_path
+from helpers.load_data_funcs import load_test_data, load_dataset_from_path
 
 """
 1. Use SFT'd model to generate pairs for RLAIF.
