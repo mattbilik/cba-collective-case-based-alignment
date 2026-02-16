@@ -26,21 +26,42 @@ class RewardDataset:
     def __init__(self, 
                  sft_model: str, 
                  constitution: dict,
-                 constitutionally_generated_harmlessness_comparisons: int):
+                 constitutionally_generated_harmlessness_comparisons: int,
+                 accelerator: Accelerator):
 
-        self.tokenizer = AutoTokenizer.from_pretrained(
-            sft_model
-        )
-        self.tokenizer.pad_token_id = self.tokenizer.eos_token_id
+        self.accelerator = accelerator
+        self.prompt_iterator = get_batch_iterator(['hh'], 
+                                             tokenizer=self.tokenizer, 
+                                             split='train', 
+                                             batch_size=4, 
+                                             sft_mode=True,
+                                             seed=0, 
+                                             n_epochs=1, 
+                                             cache_dir=os.getenv("PROJECT_CACHE", "~/.cache"), 
+                                             shuffle=False,
+                                             max_prompt_length=256, 
+                                             max_length=512,
+                                             num_turns=1, 
+                                             data_fraction=1, 
+                                             prefs_path=None, 
+                                             sampled_data_dir=None)
+
+        with self.accelerator.main_process_first():
+            self.tokenizer = AutoTokenizer.from_pretrained(
+                sft_model
+            )
+            self.tokenizer.pad_token_id = self.tokenizer.eos_token_id
+            
+            model = AutoModelForCausalLM.from_pretrained(sft_model)
+                    
+        # TODO: want to figure out how accelerator works with a batch iterator
         
-        self.model = AutoModelForCausalLM.from_pretrained(sft_model)
+        model = self.accelerator.prepare(model)
+        self.model = self.accelerator.unwrap_model(model)
+        self.accelerator.wait_for_everyone()
+        
         self.constitution = constitution
-                
         self.num_samples = constitutionally_generated_harmlessness_comparisons
-        self.prompt_iterator = get_batch_iterator(['hh'], tokenizer=self.tokenizer, split='train', batch_size=4, sft_mode=True,
-                                                  seed=0, n_epochs=1, cache_dir=os.getenv("PROJECT_CACHE", "~/.cache"), shuffle=False,
-                                                  max_prompt_length=256, max_length=512,
-                                                  num_turns=1, data_fraction=1, prefs_path=None, sampled_data_dir=None)
 
         self.__generate_completions_and_scores()
 
@@ -83,12 +104,16 @@ class RewardDataset:
                                 self.tokenizer,
                                 temperature=1.5)
         
+        responses_1 = self.accelerator.gather_for_metrics(responses_1)
+        
         responses_2 = get_completions(input_ids,
                                 attention_mask,
                                 self.model,
                                 self.accelerator,
                                 self.tokenizer,
                                 temperature=1.5)
+        
+        responses_2 = self.accelerator.gather_for_metrics(responses_2)
 
         principle = random.choice(self.constitution['principles'])
 
@@ -320,9 +345,11 @@ if __name__ == '__main__':
     with open(constitution_file_path, 'r') as f:
         constitution = json.load(f)
         
+    accelerator = Accelerator()
     dataset = RewardDataset(sft_model_path_or_name,
                             constitution,
-                            constitutionally_generated_harmlessness_comparisons)
+                            constitutionally_generated_harmlessness_comparisons,
+                            accelerator)
     
     dataset = dataset.get_dataset()
     
