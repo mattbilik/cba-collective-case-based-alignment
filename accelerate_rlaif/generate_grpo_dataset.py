@@ -3,13 +3,13 @@ import json
 import random
 import os
 import torch
-from torch.nn.utils.rnn import pad_sequence
+# from torch.nn.utils.rnn import pad_sequence
 
 from tqdm import tqdm
 import sys
 
-from datasets import Dataset
-from preference_datasets import get_batch_iterator
+# from datasets import Dataset
+from hh_preferences.preference_datasets import get_batch_iterator
 
 import time
 
@@ -329,7 +329,7 @@ if __name__ == '__main__':
     print(dataset)
     
     # Add to the datasets folder
-    dataset_folder = os.path.join(os.path.dirname(__file__), 'datasets')
+    dataset_folder = os.path.join(os.path.dirname(__file__), 'local_datasets')
     os.makedirs(dataset_folder, exist_ok=True)
     
     file_path = os.path.join(dataset_folder, 'dataset.json')

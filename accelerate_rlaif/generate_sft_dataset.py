@@ -1,7 +1,7 @@
 import os
 import json
 import random
-from preference_datasets import get_batch_iterator
+from hh_preferences.preference_datasets import get_batch_iterator
 from accelerate import Accelerator
 from torch.utils.data import DataLoader
 from transformers import AutoTokenizer, AutoModelForCausalLM
