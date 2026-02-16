@@ -25,30 +25,35 @@ BASE_MODEL = "Qwen/Qwen2-0.5B"
 class RewardDataset:
     def __init__(self, 
                  sft_model: str, 
-                 constitution_path: str,
+                 constitution: dict,
                  constitutionally_generated_harmlessness_comparisons: int):
 
         self.tokenizer = AutoTokenizer.from_pretrained(
             sft_model
         )
+        self.tokenizer.pad_token_id = self.tokenizer.eos_token_id
         
         self.model = AutoModelForCausalLM.from_pretrained(sft_model)
-        
-        self.tokenizer.pad_token_id = self.tokenizer.eos_token_id
-
-        with open(constitution_path, 'r') as f:
-            self.constitution = json.load(f)
-            
+        self.constitution = constitution
+                
         self.num_samples = constitutionally_generated_harmlessness_comparisons
-        
         self.prompt_iterator = get_batch_iterator(['hh'], tokenizer=self.tokenizer, split='train', batch_size=4, sft_mode=True,
                                                   seed=0, n_epochs=1, cache_dir=os.getenv("PROJECT_CACHE", "~/.cache"), shuffle=False,
                                                   max_prompt_length=256, max_length=512,
                                                   num_turns=1, data_fraction=1, prefs_path=None, sampled_data_dir=None)
 
         self.__generate_completions_and_scores()
+
+    def __generate_completions_and_scores(self):
         
-    def tokenize_batches(self, prompt_batches):
+        dataset = []
+        for batch in self.prompt_iterator:
+            processed_data = self.__process_prompt_batches(batch)
+            dataset.extend(processed_data)
+            
+        self.dataset = dataset
+            
+    def __tokenize_batches(self, prompt_batches):
         
         tokenized_batches = []
         for prompt_batch in prompt_batches:
@@ -57,15 +62,15 @@ class RewardDataset:
                 {"role": "user", "content": prompt_batch}
             ]
             
-            tokenized_batches.apppend(chat)
+            tokenized_batches.append(chat)
                 
         tokenized_batches = self.tokenizer.apply_chat_template(tokenized_batches, 
                                                                tokenize=True)    
         
         return tokenized_batches
 
-    def process_prompt_batches(self, prompt_batch, principle):
-        tokenized_batches = self.tokenize_batches(prompt_batch)
+    def __process_prompt_batches(self, prompt_batch, principle):
+        tokenized_batches = self.__tokenize_batches(prompt_batch)
 
         input_ids = tokenized_batches['input_ids']            
         attention_mask = tokenized_batches['attention_mask']
@@ -88,18 +93,13 @@ class RewardDataset:
         principle = random.choice(self.constitution['principles'])
 
         # Compute log probabilities for response A and response B
-        log_prob, chosen_response, rejected_response = self.__generate_log_probs(prompt_batch, 
-                                                                                 principle, 
-                                                                                 responses_1, 
-                                                                                 responses_2)
+        list_of_rows = self.__generate_log_probs(prompt_batch, 
+                                                 principle, 
+                                                 responses_1, 
+                                                 responses_2)
 
         # NOTE: Decision made out of convenience? is there another way to do this
-        return {
-            "prompt": prompt,
-            "chosen": chosen_response,
-            "rejected": rejected_response,
-            "margin": log_prob 
-        }
+        return list_of_rows
 
     def __tokenize_preference_pairs(self,
                                     batch_prompts,
@@ -179,16 +179,37 @@ class RewardDataset:
         # TODO: Turn log probability into real probabilites
         # Learn the probability of A over the probability of B -- train to the probability targets
 
-        if log_prob_1 > log_prob_2:
-            chosen_response = response_1
-            rejected_response = response_2
-            log_prob = log_prob_1
-        else:
-            chosen_response = response_2
-            rejected_response = response_1
-            log_prob = log_prob_2
+        # TODO: want to parallelize this, probably
+        list_of_rows = []
+        
+        for i, log_prob_1 in enumerate(log_probs_1):
 
-        return log_prob, chosen_response, rejected_response
+            log_prob_2 = log_probs_2[i]
+            
+            response_1 = responses_1[i]
+            response_2 = responses_2[i]
+            
+            prompt = response_prompts[i]
+
+            if log_prob_1 > log_prob_2:
+                chosen_response = response_1
+                rejected_response = response_2
+                log_prob = log_prob_1
+            else:
+                chosen_response = response_2
+                rejected_response = response_1
+                log_prob = log_prob_2
+                
+            row_item =  {
+                "prompt": prompt,
+                "chosen": chosen_response,
+                "rejected": rejected_response,
+                "margin": log_prob 
+            }
+   
+            list_of_rows.append(row_item)
+        
+        return list_of_rows
 
     def compute_log_prob_response(self, 
                                   prompt_messages,
@@ -284,15 +305,36 @@ class RewardDataset:
 
     def get_dataset(self):
         return self.dataset
-    
-
+        
 if __name__ == '__main__':
     
     start_time = time.time()    
     sft_model_path_or_name = sys.argv[3]
+    constitution_path = sys.argv[4]
+    constitutionally_generated_harmlessness_comparisons = sys.argv[5]
     
-    dataset = RewardDataset(sft_model_path_or_name)
+    constitution_folder = os.path.join(os.path.dirname(__file__), 'constitutions')
+    os.makedirs(constitution_folder, exist_ok=True)
+    constitution_file_path = os.path.join(constitution_folder, os.path.basename(constitution_path))
+
+    with open(constitution_file_path, 'r') as f:
+        constitution = json.load(f)
+        
+    dataset = RewardDataset(sft_model_path_or_name,
+                            constitution,
+                            constitutionally_generated_harmlessness_comparisons)
     
-    print(dataset.get_dataset())
+    dataset = dataset.get_dataset()
     
+    print(dataset)
+    
+    # Add to the datasets folder
+    dataset_folder = os.path.join(os.path.dirname(__file__), 'datasets')
+    os.makedirs(dataset_folder, exist_ok=True)
+    
+    file_path = os.path.join(dataset_folder, 'dataset.json')
+
+    with open(file_path, 'w', encoding='utf-8') as f:
+        json.dump(dataset, f, indent=4)
+        
     print(f"Time difference: {(time.time() - start_time) / 60} minutes")
