@@ -10,6 +10,7 @@ import sys
 
 # from datasets import Dataset
 from hh_preferences.preference_datasets import get_pytorch_iterator
+from helpers.load_data_funcs import load_test_data
 
 import time
 
@@ -22,6 +23,7 @@ from helpers.model_funcs import get_completions
 
 BASE_MODEL = "Qwen/Qwen2-0.5B"
 
+# Data to fine-tune the reward model with
 class RewardDataset:
     def __init__(self, 
                  sft_model: str, 
@@ -342,21 +344,25 @@ if __name__ == '__main__':
     sft_model_path_or_name = sys.argv[3]
     constitution_path = sys.argv[4]
     constitutionally_generated_harmlessness_comparisons = sys.argv[5]
+    test_mode = sys.argv[6]
     
-    constitution_folder = os.path.join(os.path.dirname(__file__), 'constitutions')
-    os.makedirs(constitution_folder, exist_ok=True)
-    constitution_file_path = os.path.join(constitution_folder, os.path.basename(constitution_path))
+    if test_mode == "y":
+        dataset = load_test_data()
+    else:
+        constitution_folder = os.path.join(os.path.dirname(__file__), 'constitutions')
+        os.makedirs(constitution_folder, exist_ok=True)
+        constitution_file_path = os.path.join(constitution_folder, os.path.basename(constitution_path))
 
-    with open(constitution_file_path, 'r') as f:
-        constitution = json.load(f)
+        with open(constitution_file_path, 'r') as f:
+            constitution = json.load(f)
+            
+        accelerator = Accelerator()
+        dataset = RewardDataset(sft_model_path_or_name,
+                                constitution,
+                                constitutionally_generated_harmlessness_comparisons,
+                                accelerator)
         
-    accelerator = Accelerator()
-    dataset = RewardDataset(sft_model_path_or_name,
-                            constitution,
-                            constitutionally_generated_harmlessness_comparisons,
-                            accelerator)
-    
-    dataset = dataset.get_dataset()
+        dataset = dataset.get_dataset()
     
     print(dataset)
     

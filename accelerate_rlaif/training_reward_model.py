@@ -5,7 +5,7 @@ from transformers import AutoModelForSequenceClassification
 from trl import RewardTrainer, RewardConfig
 
 import time
-from helpers.load_data_funcs import load_test_data, load_dataset_from_path
+from helpers.load_data_funcs import load_dataset_from_path
 
 BASE_MODEL = "Qwen/Qwen2-0.5B"
 
@@ -59,7 +59,6 @@ def train_reward_model(dataset,
 
 if __name__ == '__main__':
 
-
     start_time = time.time()
     data_parallel_degree = torch.cuda.device_count()
     
@@ -68,8 +67,7 @@ if __name__ == '__main__':
     dataset_path = sys.argv[3]
     reward_model_path = sys.argv[4]
             
-    dataset = load_test_data()
-    # dataset = load_dataset_from_path(dataset_path)
+    dataset = load_dataset_from_path(dataset_path)
 
     train_reward_model(dataset, reward_model_path)
 

@@ -3,13 +3,9 @@ import json
 import random
 from hh_preferences.preference_datasets import get_pytorch_iterator
 from accelerate import Accelerator
-from torch.utils.data import DataLoader
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from sentence_transformers import SentenceTransformer
-import sentence_transformers.util as st_util
 import torch
-import heapq
-import gc
 
 from helpers.model_funcs import get_completions
 

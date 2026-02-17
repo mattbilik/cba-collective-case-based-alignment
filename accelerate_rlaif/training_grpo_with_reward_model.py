@@ -1,4 +1,5 @@
 import torch
+import sys
 from peft import LoraConfig, TaskType
 from transformers import AutoModelForSequenceClassification
 from trl import GRPOTrainer, GRPOConfig
@@ -6,7 +7,7 @@ from datasets import Dataset
 
 import time
 
-from helpers.load_data_funcs import load_test_data, load_dataset_from_path
+from helpers.load_data_funcs import load_dataset_from_path
 
 """
 1. Use SFT'd model to generate pairs for RLAIF.
@@ -19,9 +20,9 @@ from helpers.load_data_funcs import load_test_data, load_dataset_from_path
 BASE_MODEL = "Qwen/Qwen2-0.5B"
 
 # Final GRPO model name
-FINAL_MODEL_NAME = "grpo_model_constitution_FINAL"
+FINAL_MODEL_NAME = "/models/grpo_model_constitution_FINAL"
 OUTPUT_DIR = "./grpo_model_constitution_checkpoints"
-REWARD_MODEL_PATH = "final_reward_model"
+REWARD_MODEL_PATH = "/models/final_reward_model"
 
 # reward_model = AutoModelForSequenceClassification.from_pretrained("distilbert/distilbert-base-uncased", num_labels=2).to("cpu")
 
@@ -102,10 +103,17 @@ if __name__ == '__main__':
     #     # fsdp_plugin=fsdp_plugin
     # )
 
-    # dataset_path = sys.argv[3]    
-    dataset = load_test_data()
+    dataset_path = sys.argv[3] 
+    reward_model_path_or_name = sys.argv[4]
+    model_path_or_name = sys.argv[5]    
+    output_directory = sys.argv[6]    
     
-    train_with_grpo(dataset)
+    dataset = load_dataset_from_path(dataset_path)
+    
+    train_with_grpo(dataset,
+                    reward_model_path_or_name,
+                    model_path_or_name,
+                    output_directory)
     
     # accelerator.wait_for_everyone() 
     
