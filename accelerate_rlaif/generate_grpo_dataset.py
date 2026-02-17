@@ -9,7 +9,7 @@ from tqdm import tqdm
 import sys
 
 # from datasets import Dataset
-from hh_preferences.preference_datasets import get_batch_iterator
+from hh_preferences.preference_datasets import get_pytorch_iterator
 
 import time
 
@@ -30,7 +30,16 @@ class RewardDataset:
                  accelerator: Accelerator):
 
         self.accelerator = accelerator
-        self.prompt_iterator = get_batch_iterator(['hh'], 
+
+        with self.accelerator.main_process_first():
+            self.tokenizer = AutoTokenizer.from_pretrained(
+                sft_model
+            )
+            self.tokenizer.pad_token_id = self.tokenizer.eos_token_id
+            
+            model = AutoModelForCausalLM.from_pretrained(sft_model)
+                    
+        prompt_iterator = get_pytorch_iterator(['hh'], 
                                              tokenizer=self.tokenizer, 
                                              split='train', 
                                              batch_size=4, 
@@ -46,18 +55,10 @@ class RewardDataset:
                                              prefs_path=None, 
                                              sampled_data_dir=None)
 
-        with self.accelerator.main_process_first():
-            self.tokenizer = AutoTokenizer.from_pretrained(
-                sft_model
-            )
-            self.tokenizer.pad_token_id = self.tokenizer.eos_token_id
-            
-            model = AutoModelForCausalLM.from_pretrained(sft_model)
-                    
-        # TODO: want to figure out how accelerator works with a batch iterator
-        
-        model = self.accelerator.prepare(model)
+        model, prompt_iterator = self.accelerator.prepare(model, prompt_iterator)
         self.model = self.accelerator.unwrap_model(model)
+        self.prompt_iterator = prompt_iterator
+        
         self.accelerator.wait_for_everyone()
         
         self.constitution = constitution
@@ -68,6 +69,10 @@ class RewardDataset:
     def __generate_completions_and_scores(self):
         
         dataset = []
+        
+        # The dataloader should already be split onto each of the GPUs that are
+        # assigned -- the micro batches 
+        
         for batch in self.prompt_iterator:
             processed_data = self.__process_prompt_batches(batch)
             dataset.extend(processed_data)

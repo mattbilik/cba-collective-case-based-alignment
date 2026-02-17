@@ -1,7 +1,7 @@
 import os
 import json
 import random
-from hh_preferences.preference_datasets import get_batch_iterator
+from hh_preferences.preference_datasets import get_pytorch_iterator
 from accelerate import Accelerator
 from torch.utils.data import DataLoader
 from transformers import AutoTokenizer, AutoModelForCausalLM
@@ -285,7 +285,7 @@ def create_revisions(model_name: str = 'Qwen/Qwen2-7B',
         
         # Processing helpfulness, harmfulness dataset from Anthropic
         # TODO: does this need to be a DataLoader?
-        prompt_iterator = get_batch_iterator(['hh'],
+        prompt_iterator = get_pytorch_iterator(['hh'],
                                              tokenizer=tokenizer,
                                              split='train',
                                              batch_size=4,
