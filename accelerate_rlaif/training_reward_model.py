@@ -3,6 +3,7 @@ import sys
 from peft import LoraConfig, TaskType
 from transformers import AutoModelForSequenceClassification
 from trl import RewardTrainer, RewardConfig
+from datasets import Dataset
 
 import time
 import os
@@ -18,8 +19,8 @@ REWARD_MODEL_PATH = "final_reward_model"
 
 REWARD_MODEL_BATCH_SIZE = 2
 
-def train_reward_model(dataset,
-                       accelerator, 
+def train_reward_model(dataset: Dataset,
+                       accelerator: Accelerator, 
                        reward_model_path: str = REWARD_MODEL_PATH,
                        model_path_or_name: str = BASE_MODEL,
                        output_directory: str = OUTPUT_DIR) -> AutoModelForSequenceClassification:
