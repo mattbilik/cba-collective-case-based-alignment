@@ -45,13 +45,10 @@ def train_with_grpo(dataset: Dataset,
         reward_model_path_or_name)
     
     reward_tokenizer = AutoTokenizer.from_pretrained(
-        BASE_MODEL,
+        model_path_or_name,
         trust_remote_code=True
     )
-    
-    # Ensure it has a pad_token
-    reward_model.eval()
-    
+        
     if reward_tokenizer.pad_token is None:
         reward_tokenizer.pad_token = reward_tokenizer.eos_token
         
@@ -60,6 +57,11 @@ def train_with_grpo(dataset: Dataset,
         
     for param in reward_model.parameters():
         param.requires_grad = False
+        
+    reward_model = accelerator.prepare(reward_model)
+    
+    # Ensure it has a pad_token
+    reward_model.eval()
 
     peft_config = LoraConfig(
         task_type=TaskType.CAUSAL_LM,
@@ -85,7 +87,7 @@ def train_with_grpo(dataset: Dataset,
         
         # NOTE: Ideally, this would be the case
         # gradient_checkpointing=True,
-        # ddp_find_unused_parameters=True,
+        ddp_find_unused_parameters=False,
     )
 
     grpo_trainer = GRPOTrainer(

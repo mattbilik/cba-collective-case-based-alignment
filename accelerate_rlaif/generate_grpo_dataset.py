@@ -3,6 +3,7 @@ import json
 import random
 import os
 import torch
+import torch.distributed as dist
 # from torch.nn.utils.rnn import pad_sequence
 
 from tqdm import tqdm
@@ -350,17 +351,18 @@ if __name__ == '__main__':
     if accelerator.is_local_main_process:
         start_time = time.time()
         print(sys.argv)
-        
 
     if test_mode == "y":
         dataset = load_test_data()
     else:
-        constitution_folder = os.path.join(os.path.dirname(__file__), 'constitutions')
-        os.makedirs(constitution_folder, exist_ok=True)
-        constitution_file_path = os.path.join(constitution_folder, os.path.basename(constitution_path))
+        
+        with accelerator.main_process_first():
+            constitution_folder = os.path.join(os.path.dirname(__file__), 'constitutions')
+            os.makedirs(constitution_folder, exist_ok=True)
+            constitution_file_path = os.path.join(constitution_folder, os.path.basename(constitution_path))
 
-        with open(constitution_file_path, 'r') as f:
-            constitution = json.load(f)
+            with open(constitution_file_path, 'r') as f:
+                constitution = json.load(f)
             
         dataset = RewardDataset(sft_model_path_or_name,
                                 constitution,
@@ -382,3 +384,6 @@ if __name__ == '__main__':
             json.dump(dataset, f, indent=4)
             
         print(f"Time difference: {(time.time() - start_time) / 60} minutes")
+
+        if dist.is_initialized():
+            dist.destroy_process_group()

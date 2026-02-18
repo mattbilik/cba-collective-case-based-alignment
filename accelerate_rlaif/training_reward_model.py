@@ -1,4 +1,6 @@
 import torch
+import torch.distributed as dist
+
 import sys
 from peft import LoraConfig, TaskType
 from transformers import AutoModelForSequenceClassification
@@ -79,13 +81,18 @@ if __name__ == '__main__':
     
     dataset_path = sys.argv[1]
     reward_model_path = sys.argv[2]
+    model_path_or_name = sys.argv[3]
             
     with accelerator.main_process_first():
         dataset = load_dataset_from_path(dataset_path)
 
     train_reward_model(dataset,
                        accelerator, 
-                       reward_model_path)
+                       reward_model_path,
+                       model_path_or_name)
     
     if accelerator.is_local_main_process:
         print(f"Time difference: {(time.time() - start_time) / 60} minutes")
+            
+        if dist.is_initialized():
+            dist.destroy_process_group()
