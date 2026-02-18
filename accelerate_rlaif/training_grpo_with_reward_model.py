@@ -103,10 +103,10 @@ if __name__ == '__main__':
     #     # fsdp_plugin=fsdp_plugin
     # )
 
-    dataset_path = sys.argv[3] 
-    reward_model_path_or_name = sys.argv[4]
-    model_path_or_name = sys.argv[5]    
-    output_directory = sys.argv[6]    
+    dataset_path = sys.argv[1] 
+    reward_model_path_or_name = sys.argv[2]
+    model_path_or_name = sys.argv[3]    
+    output_directory = sys.argv[4]    
     
     dataset = load_dataset_from_path(dataset_path)
     

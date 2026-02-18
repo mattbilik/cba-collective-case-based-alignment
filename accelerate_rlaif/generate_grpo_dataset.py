@@ -340,12 +340,18 @@ class RewardDataset:
         
 if __name__ == '__main__':
     
-    start_time = time.time()    
-    sft_model_path_or_name = sys.argv[3]
-    constitution_path = sys.argv[4]
-    constitutionally_generated_harmlessness_comparisons = sys.argv[5]
-    test_mode = sys.argv[6]
+    sft_model_path_or_name = sys.argv[1]
+    constitution_path = sys.argv[2]
+    constitutionally_generated_harmlessness_comparisons = sys.argv[3]
+    test_mode = sys.argv[4]
     
+    accelerator = Accelerator()
+    
+    if accelerator.is_local_main_process:
+        start_time = time.time()
+        print(sys.argv)
+        
+
     if test_mode == "y":
         dataset = load_test_data()
     else:
@@ -356,7 +362,6 @@ if __name__ == '__main__':
         with open(constitution_file_path, 'r') as f:
             constitution = json.load(f)
             
-        accelerator = Accelerator()
         dataset = RewardDataset(sft_model_path_or_name,
                                 constitution,
                                 constitutionally_generated_harmlessness_comparisons,
@@ -364,15 +369,16 @@ if __name__ == '__main__':
         
         dataset = dataset.get_dataset()
     
-    print(dataset)
-    
-    # Add to the datasets folder
-    dataset_folder = os.path.join(os.path.dirname(__file__), 'local_datasets')
-    os.makedirs(dataset_folder, exist_ok=True)
-    
-    file_path = os.path.join(dataset_folder, 'dataset.json')
-
-    with open(file_path, 'w', encoding='utf-8') as f:
-        json.dump(dataset, f, indent=4)
+    if accelerator.is_local_main_process:
+        print(dataset)
         
-    print(f"Time difference: {(time.time() - start_time) / 60} minutes")
+        # Add to the datasets folder
+        dataset_folder = os.path.join(os.path.dirname(__file__), 'local_datasets')
+        os.makedirs(dataset_folder, exist_ok=True)
+        
+        file_path = os.path.join(dataset_folder, 'dataset.json')
+
+        with open(file_path, 'w', encoding='utf-8') as f:
+            json.dump(dataset, f, indent=4)
+            
+        print(f"Time difference: {(time.time() - start_time) / 60} minutes")
