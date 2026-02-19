@@ -103,8 +103,10 @@ class RewardDataset:
         # The dataloader should already be split onto each of the GPUs that are
         # assigned -- the micro batches 
         
-        for batch in self.prompt_iterator:
+        for batch in tqdm(self.prompt_iterator, desc='Creating reward model dataset'):
             
+            
+            # TODO: do we need to combine these outputs somehow or no -- tldr; yes
             # Only need prompts for GRPO
             
             # print(batch)
@@ -262,10 +264,8 @@ class RewardDataset:
 
         # TODO: want to parallelize this, probably
         list_of_rows = []
-        
-        print(f"Lengths:\n lp1 {len(log_probs_1)}, lp2 {len(log_probs_2)}, p {len(response_prompts)}")
-        
-        assert log_probs_1 == log_probs_2 == response_prompts
+                
+        assert len(log_probs_1) == len(log_probs_2) == len(response_prompts)
         
         for i, log_prob_1 in enumerate(log_probs_1):
 
