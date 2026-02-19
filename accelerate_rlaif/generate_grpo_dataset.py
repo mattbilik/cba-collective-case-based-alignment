@@ -57,10 +57,13 @@ class RewardDataset:
 
         self.accelerator = accelerator
 
+        # NOTE: the padding side is specified as left because we're generating content
         with self.accelerator.main_process_first():
             self.tokenizer = AutoTokenizer.from_pretrained(
-                sft_model
+                sft_model,
+                padding_side='left'
             )
+            
             self.tokenizer.pad_token_id = self.tokenizer.eos_token_id
             
             model = AutoModelForCausalLM.from_pretrained(
@@ -105,7 +108,6 @@ class RewardDataset:
         
         for batch in tqdm(self.prompt_iterator, desc='Creating reward model dataset'):
             
-            
             # TODO: do we need to combine these outputs somehow or no -- tldr; yes
             # Only need prompts for GRPO
             
@@ -126,7 +128,6 @@ class RewardDataset:
             for prompt in prompt_batches
         ]
         
-        
         tokenized_batches = self.tokenizer.apply_chat_template(
             tokenized_batches,
             tokenize=True,
@@ -135,7 +136,6 @@ class RewardDataset:
             padding=True,
             return_dict=True
         ) 
-        # print(tokenized_batches)
         
         return tokenized_batches
 
@@ -308,11 +308,13 @@ class RewardDataset:
                                                                 responses_1,
                                                                 responses_2,
                                                                 selected_response)
-
+            
         # prompt_len = len(inputs)
 
         # E.g.
 
+        # NOTE: Computing the log probability of the response (B)
+        
         # Prompt Message
         # Consider the following conversation between a human and an assistant:
         #     {response_prompt}
@@ -331,25 +333,32 @@ class RewardDataset:
             "input_ids": tokenized_preference_pairs['input_ids'],
             "attention_mask": tokenized_preference_pairs['attention_mask']
         }
+        
+        prompt_lengths = []
+        for batch_item_prompt in prompt_messages:
+            prompt_messages = [{"role": "user", "content": batch_item_prompt}]
+            prompt_ids = self.tokenizer.apply_chat_template(
+                prompt_messages, 
+                add_generation_prompt=True, 
+                return_tensors="pt"
+            )        
+            
+            p_len = prompt_ids.size(1)
+            prompt_lengths.append(p_len)
 
         batch_labels = inputs["input_ids"].clone()
-                
-        prompt_lengths = inputs["attention_mask"].sum(dim=1)
+        
+        prompt_plus_padding_lengths = inputs["attention_mask"].sum(dim=1).tolist() + prompt_lengths
         
         for i, batch_item_label in enumerate(batch_labels):
             
-            prompt_length = prompt_lengths[i]
+            prompt_plus_padding_length = prompt_plus_padding_lengths[i]
             
-            # Ignore all prompt tokens (only interested in A or B log prob)
+            # Ignore all prompt & padding tokens (only interested in A or B log prob)
             # I.e. mask everything up to prompt_length
             
             # For this particular batch item
-            batch_item_label[:prompt_length] = -100
-
-        # NOTE: Don't need to pad batch_labels because just changing value to ignore
-
-        # We want to use the SFT model to compute the log probabilities of the responses
-        # outputs = self.SFT_model.get_outputs(**input_strings, labels=labels)
+            batch_item_label[:prompt_plus_padding_length] = -100
         
         inputs["input_ids"] = inputs["input_ids"].to(self.accelerator.device)
         inputs["attention_mask"] = inputs["attention_mask"].to(self.accelerator.device)
@@ -364,13 +373,18 @@ class RewardDataset:
                 # Just getting logits like this
                 logits = outputs.logits         
         
-        # final prompt token -- i.e. end of prompt
-        start_indices = (inputs["attention_mask"].sum(dim=1) - 1).tolist()
+        # final prompt token -- i.e. start of prompt and response
         
         final_log_probs = []
-        for batch_item_logits, start_idx, ids in zip(logits, start_indices, inputs["input_ids"]):
+        for batch_item_logits, start_idx, ids in zip(logits, 
+                                                     prompt_plus_padding_lengths, 
+                                                     inputs["input_ids"]):
+            
+            # From the start of the response to 1 before the end, all items in vectors
+            # Dimension -1, on last dimension (i.e. the items in each vector)
             log_probs = torch.log_softmax(batch_item_logits[start_idx:-1, :], dim=-1)
             
+            # 1 after the beginning of the response
             target_ids = ids[start_idx + 1:]
             
             selected_log_probs = torch.gather(
