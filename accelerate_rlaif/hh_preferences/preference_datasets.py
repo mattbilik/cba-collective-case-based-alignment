@@ -637,11 +637,22 @@ def get_collate_fn_dataloader(tokenizer,
     
         truncation_mode = "keep_end"
         
+        # print(batch)
+        
         tokenized_batch = []
-        for prompt, data in batch:
+        
+        for batch_element in batch:
             
-            sft_target = data['sft_target']
-            tokenized_batch.append(tokenize_batch_element(prompt, sft_target, sft_target, truncation_mode, tokenizer, max_length, max_prompt_length))
+            sft_target = batch_element['data']['sft_target']
+            prompt = batch_element['prompt']
+            
+            tokenized_batch.append(tokenize_batch_element(prompt, 
+                                                          sft_target, 
+                                                          sft_target, 
+                                                          truncation_mode, 
+                                                          tokenizer, 
+                                                          max_length, 
+                                                          max_prompt_length))
             
         batch = tokenized_batch
         
@@ -667,8 +678,12 @@ def get_collate_fn_dataloader(tokenizer,
                     padded_batch[k] = padded_batch[k].flip(dims=[1])
             else:
                 padded_batch[k] = [ex[k] for ex in batch]
+                
+            # print(padded_batch)
 
         return padded_batch
+    
+    
     return collate_fn
 
 def tokenize_batch_element(prompt: str, chosen: str, rejected: str, truncation_mode: str, tokenizer, max_length: int, max_prompt_length: int) -> Dict:
@@ -757,12 +772,30 @@ def get_pytorch_iterator(names: List[str],
     hf_dataset = get_dataset(name, 
                              split, 
                              silent=silent, 
-                             cache_dir=cache_dir, 
-                             collate_fn=collate_fn,
+                             cache_dir=cache_dir,
                              **kwargs)
+    
+    rows = []
+    
+    for prompt_text, data in tqdm.tqdm(hf_dataset.items(), desc='Processing list conversion', disable=silent):
+        rows.append({
+            "prompt": prompt_text,
+            "data": {
+                "responses": data["responses"],
+                "pairs": data["pairs"],
+                "sft_target": data["sft_target"]
+            }
+        })
+        
+    # print(f"Dataset type: {type(hf_dataset)}")
+    
+    hf_dataset = datasets.Dataset.from_list(rows)
+    
+    print("\nPassing dataset to dataloader...")
     
     dataloader = DataLoader(hf_dataset, 
                             batch_size=batch_size,
+                            collate_fn=collate_fn,
                             shuffle=shuffle)
     
     return dataloader

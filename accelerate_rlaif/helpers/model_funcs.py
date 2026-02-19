@@ -9,8 +9,12 @@ def get_completions(input_ids,
                     temperature=1,
                     max_new_tokens=200):
         
-    input_ids.to(accelerator.device)
+    input_ids = input_ids.to(accelerator.device)
+    attention_mask = attention_mask.to(accelerator.device)
+        
     prompt_lengths = attention_mask.sum(dim=1)
+    
+    print(f"Model device: {model.device}\nInput device {input_ids.device}")
     
     with torch.inference_mode():    
         output = model.generate(
@@ -27,9 +31,10 @@ def get_completions(input_ids,
         response = output[i][length:]
         responses.append(response)
     
-    responses = pad_sequence(responses, batch_first=True, 
-                            padding_value=tokenizer.pad_token_id)
+    responses = pad_sequence(responses, 
+                             batch_first=True, 
+                             padding_value=tokenizer.pad_token_id)
     
-    responses = tokenizer.decode(responses)
+    responses = tokenizer.batch_decode(responses)
             
     return responses

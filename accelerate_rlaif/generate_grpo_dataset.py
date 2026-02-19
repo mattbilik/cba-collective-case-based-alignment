@@ -4,7 +4,7 @@ import random
 import os
 import torch
 import torch.distributed as dist
-# from torch.nn.utils.rnn import pad_sequence
+from torch.nn.utils.rnn import pad_sequence
 
 from tqdm import tqdm
 import sys
@@ -18,11 +18,34 @@ import time
 from accelerate import Accelerator
 from accelerate.parallelism_config import ParallelismConfig
 
-from transformers import AutoTokenizer, AutoModelForCausalLM
+from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
 
 from helpers.model_funcs import get_completions
 
 BASE_MODEL = "Qwen/Qwen2-0.5B"
+
+
+# ---- QUANTIZATION CONFIGURATION ----
+# NOTE: Not able to use bf16 because we're using NVIDIA 2080 GPUs
+
+# Activate 4-bit precision base model loading
+use_4bit = True
+# Compute dtype for 4-bit base models
+bnb_4bit_compute_dtype = "float16"
+# Quantization type (fp4 or nf4)
+bnb_4bit_quant_type = "nf4"
+# Activate nested quantization for 4-bit base models (double quantization)
+use_nested_quant = False
+
+compute_dtype = getattr(torch, bnb_4bit_compute_dtype)
+
+# Fine-tuning on self-revised responses from HH dataset with our constitution
+bnb_config = BitsAndBytesConfig(
+    load_in_4bit=use_4bit,
+    bnb_4bit_quant_type=bnb_4bit_quant_type,
+    bnb_4bit_compute_dtype=compute_dtype,
+    bnb_4bit_use_double_quant=use_nested_quant,
+)
 
 # Data to fine-tune the reward model with
 class RewardDataset:
@@ -40,23 +63,27 @@ class RewardDataset:
             )
             self.tokenizer.pad_token_id = self.tokenizer.eos_token_id
             
-            model = AutoModelForCausalLM.from_pretrained(sft_model)
+            model = AutoModelForCausalLM.from_pretrained(
+                sft_model,
+                dtype=compute_dtype,
+                quantization_config=bnb_config
+            )
                     
-        prompt_iterator = get_pytorch_iterator(['hh'], 
-                                             tokenizer=self.tokenizer, 
-                                             split='train', 
-                                             batch_size=4, 
-                                             sft_mode=True,
-                                             seed=0, 
-                                             n_epochs=1, 
-                                             cache_dir=os.getenv("PROJECT_CACHE", "~/.cache"), 
-                                             shuffle=False,
-                                             max_prompt_length=256, 
-                                             max_length=512,
-                                             num_turns=1, 
-                                             data_fraction=1, 
-                                             prefs_path=None, 
-                                             sampled_data_dir=None)
+            prompt_iterator = get_pytorch_iterator(['hh'], 
+                                                tokenizer=self.tokenizer, 
+                                                split='train', 
+                                                batch_size=4, 
+                                                sft_mode=True,
+                                                seed=0, 
+                                                n_epochs=1, 
+                                                cache_dir=os.getenv("PROJECT_CACHE", "~/.cache"), 
+                                                shuffle=False,
+                                                max_prompt_length=256, 
+                                                max_length=512,
+                                                num_turns=1, 
+                                                data_fraction=1, 
+                                                prefs_path=None, 
+                                                sampled_data_dir=None)
 
         model, prompt_iterator = self.accelerator.prepare(model, prompt_iterator)
         self.model = self.accelerator.unwrap_model(model)
@@ -77,6 +104,13 @@ class RewardDataset:
         # assigned -- the micro batches 
         
         for batch in self.prompt_iterator:
+            
+            # Only need prompts for GRPO
+            
+            # print(batch)
+            batch = batch['prompt']
+            # print(batch)
+            
             processed_data = self.__process_prompt_batches(batch)
             dataset.extend(processed_data)
             
@@ -84,29 +118,38 @@ class RewardDataset:
             
     def __tokenize_batches(self, prompt_batches):
         
-        tokenized_batches = []
-        for prompt_batch in prompt_batches:
+        tokenized_batches = [
+            [{"role": "user", "content": prompt}]
             
-            chat = [
-                {"role": "user", "content": prompt_batch}
-            ]
-            
-            tokenized_batches.append(chat)
-                
-        tokenized_batches = self.tokenizer.apply_chat_template(tokenized_batches, 
-                                                               tokenize=True)    
+            for prompt in prompt_batches
+        ]
+        
+        
+        tokenized_batches = self.tokenizer.apply_chat_template(
+            tokenized_batches,
+            tokenize=True,
+            add_generation_prompt=True,
+            return_tensors="pt",
+            padding=True,
+            return_dict=True
+        ) 
+        # print(tokenized_batches)
         
         return tokenized_batches
 
-    def __process_prompt_batches(self, prompt_batch, principle):
+    def __process_prompt_batches(self, prompt_batch):
         tokenized_batches = self.__tokenize_batches(prompt_batch)
-
-        input_ids = tokenized_batches['input_ids']            
-        attention_mask = tokenized_batches['attention_mask']
+                
+        input_ids = tokenized_batches['input_ids']
+        attention_masks = tokenized_batches['attention_mask']
+        
+        # for batch_item in tokenized_batches:
+        #     input_ids.append(batch_item['input_ids'])   
+        #     attention_masks.append(batch_item['attention_mask'])      
         
         # NOTE: 4 responses per batch, need to be paired
         responses_1 = get_completions(input_ids,
-                                attention_mask,
+                                attention_masks,
                                 self.model,
                                 self.accelerator,
                                 self.tokenizer,
@@ -115,7 +158,7 @@ class RewardDataset:
         responses_1 = self.accelerator.gather_for_metrics(responses_1)
         
         responses_2 = get_completions(input_ids,
-                                attention_mask,
+                                attention_masks,
                                 self.model,
                                 self.accelerator,
                                 self.tokenizer,
@@ -161,11 +204,16 @@ class RewardDataset:
                 {"role": "user", "content": prompt},
                 {"role": "assistant", "content": selected_response}
             ]
-            
+                        
             tokenized_preference_pairs.append(chat)
-        
-        tokenized_preference_pairs = self.tokenizer.apply_chat_template(tokenized_preference_pairs, tokenize=True)    
-        
+            
+        tokenized_preference_pairs = self.tokenizer.apply_chat_template(
+                                    tokenized_preference_pairs,
+                                    tokenize=True,
+                                    return_tensors="pt",
+                                    padding=True,
+                                    return_dict=True)
+
         return tokenized_preference_pairs
 
     def __generate_log_probs(self, 
@@ -214,6 +262,10 @@ class RewardDataset:
 
         # TODO: want to parallelize this, probably
         list_of_rows = []
+        
+        print(f"Lengths:\n lp1 {len(log_probs_1)}, lp2 {len(log_probs_2)}, p {len(response_prompts)}")
+        
+        assert log_probs_1 == log_probs_2 == response_prompts
         
         for i, log_prob_1 in enumerate(log_probs_1):
 
@@ -274,55 +326,96 @@ class RewardDataset:
         # (B)
         
         # Qwen, make sure to return BatchEncoding-like object
-        if isinstance(inputs, torch.Tensor):
-            inputs = {
-                "input_ids": tokenized_preference_pairs['input_ids'],
-                "attention_mask": tokenized_preference_pairs['attention_mask']
-            }
+        
+        inputs = {
+            "input_ids": tokenized_preference_pairs['input_ids'],
+            "attention_mask": tokenized_preference_pairs['attention_mask']
+        }
 
-        all_batch_labels = inputs["input_ids"].clone()
+        batch_labels = inputs["input_ids"].clone()
                 
-        for i, batch_label in enumerate(all_batch_labels):
+        prompt_lengths = inputs["attention_mask"].sum(dim=1)
+        
+        for i, batch_item_label in enumerate(batch_labels):
             
-            prompt_length = inputs["attention_mask"][i].sum(dim=1)
+            prompt_length = prompt_lengths[i]
             
             # Ignore all prompt tokens (only interested in A or B log prob)
             # I.e. mask everything up to prompt_length
             
-            # For this particular batch
-            batch_label[:prompt_length] = -100
+            # For this particular batch item
+            batch_item_label[:prompt_length] = -100
 
         # NOTE: Don't need to pad batch_labels because just changing value to ignore
 
         # We want to use the SFT model to compute the log probabilities of the responses
         # outputs = self.SFT_model.get_outputs(**input_strings, labels=labels)
         
-        with torch.inference_mode():
-            outputs = self.model(
-                input_ids=inputs["input_ids"],
-                attention_mask=inputs["attention_mask"],
-                labels=all_batch_labels
-            )
+        inputs["input_ids"] = inputs["input_ids"].to(self.accelerator.device)
+        inputs["attention_mask"] = inputs["attention_mask"].to(self.accelerator.device)
 
-        log_probs = []
-        for i, output in enumerate(outputs):
+        with torch.inference_mode():
+                # not passing labels for mem savings
+                outputs = self.model(
+                    input_ids=inputs["input_ids"],
+                    attention_mask=inputs["attention_mask"]
+                )
+                
+                # Just getting logits like this
+                logits = outputs.logits         
+        
+        # final prompt token -- i.e. end of prompt
+        start_indices = (inputs["attention_mask"].sum(dim=1) - 1).tolist()
+        
+        final_log_probs = []
+        for batch_item_logits, start_idx, ids in zip(logits, start_indices, inputs["input_ids"]):
+            log_probs = torch.log_softmax(batch_item_logits[start_idx:-1, :], dim=-1)
             
-            response_start_index = inputs["attention_mask"][i].sum(dim=1) - 1
-            
-            response_logits = output.logits[response_start_index:-1, :]
-            
-            # Get response tokens from output
-            prompt_length = inputs["attention_mask"][i].sum(dim=1)
-            response_token_ids = inputs["input_ids"][i][prompt_length:]
-            
-            log_probs = torch.log_softmax(response_logits, dim=-1)
+            target_ids = ids[start_idx + 1:]
             
             selected_log_probs = torch.gather(
-                log_probs, -1, response_token_ids.unsqueeze(-1)).squeeze(-1)
+                log_probs, -1, target_ids.unsqueeze(-1)).squeeze(-1)
             
-            log_probs.append(selected_log_probs.sum().item())
+            final_log_probs.append(selected_log_probs.sum())
+        
+        print(final_log_probs)
+        
+        # local_tensor = torch.stack(final_log_probs)
+        # all_gathered_scores = self.accelerator.gather(final_log_probs)
+        
+        # response_log_probs = [
+        #     # everything after prompt until 1 token before the end of the response
+        #     torch.log_softmax(batch_item_logits[start_idx:-1, :], dim=-1)
+        #     for batch_item_logits, start_idx in zip(logits, start_indices)
+        # ]        
+        
+        # selected_log_probs = torch.gather(
+        #         log_probs, -1, response_token_ids.unsqueeze(-1)).squeeze(-1)
+        
+        
+        
+        
+        # last dimension
+        # torch.log_softmax(response_logits, dim=-1)
+        
+        # for i, output in enumerate(outputs):
+            
+        #     response_start_index = inputs["attention_mask"][i].sum(dim=1) - 1
+            
+        #     response_logits = output.logits[response_start_index:-1, :]
+            
+        #     # Get response tokens from output
+        #     prompt_length = inputs["attention_mask"][i].sum(dim=1)
+        #     response_token_ids = inputs["input_ids"][i][prompt_length:]
+            
+        #     log_probs = torch.log_softmax(response_logits, dim=-1)
+            
+        #     selected_log_probs = torch.gather(
+        #         log_probs, -1, response_token_ids.unsqueeze(-1)).squeeze(-1)
+            
+        #     log_probs.append(selected_log_probs.sum().item())
 
-        return log_probs
+        return final_log_probs
 
         # # The first predicted token is the one after the prompt
         # response_start_index = prompt_len - 1
