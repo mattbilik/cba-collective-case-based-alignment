@@ -239,7 +239,7 @@ def run_generation(prompt_iterator, tokenizer, model, accelerator, constitution)
         final_completion = revise_responses_on_constitution(batch,
             model, tokenizer, accelerator, constitution, number_of_revisions=4)
         
-        final_completion = accelerator.gather_for_metrics(final_completion)
+        # final_completion = accelerator.gather_for_metrics(final_completion)
         
         responses.extend(final_completion)
         
