@@ -3,12 +3,12 @@ import json
 import random
 from hh_preferences.preference_datasets import get_pytorch_iterator
 from accelerate import Accelerator
-from accelerate.utils import gather_object
 from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
 from sentence_transformers import SentenceTransformer
 import torch
 
 from helpers.model_funcs import get_completions
+from helpers.accelerate_funcs import gather_iterator_batches
 
 CASE_REGIME = "constitution"
 
@@ -244,18 +244,8 @@ def run_generation(prompt_iterator, tokenizer, model, accelerator, constitution)
         
         responses.extend(final_completion)
         
-    gathered_data = gather_object(responses)
+    responses = gather_iterator_batches(responses)
     
-    if accelerator.is_main_process:
-        # NOTE: check this
-        # Flatten the list of lists into one big list
-        flat_dataset = [item for sublist in gathered_data for item in sublist]
-        
-        # Use the length of the original dataset to trim off DDP padding
-        # This replaces what gather_for_metrics does automatically for tensors
-        total_samples = len(prompt_iterator.dataset)
-        responses = flat_dataset[:total_samples]
-
     return responses
 
 def prompt_from_hh_anthropic(instruction):
