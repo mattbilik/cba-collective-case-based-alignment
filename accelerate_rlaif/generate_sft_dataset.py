@@ -109,8 +109,13 @@ def tokenize_chat_history(batch_prompts,
         chat_for_one_prompt = get_all_turns_and_format(batch_prompt)
         batch_chats.append(chat_for_one_prompt)
     
-    batch_chats = tokenizer.apply_chat_template(batch_chats, tokenize=True)    
-    
+    batch_chats = tokenizer.apply_chat_template(
+            batch_chats,
+            return_tensors="pt",
+            padding=True,
+            return_dict=True
+    )  
+
     return batch_chats
 
 def tokenize_revision_request(batch_prompts, 
@@ -140,7 +145,6 @@ def tokenize_revision_request(batch_prompts,
         
     revision_requests = tokenizer.apply_chat_template(
             revision_requests,
-            add_generation_prompt=True,
             return_tensors="pt",
             padding=True,
             return_dict=True
