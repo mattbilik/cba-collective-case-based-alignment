@@ -4,6 +4,7 @@ import random
 import os
 import torch
 import torch.distributed as dist
+from accelerate.utils import gather_object
 from torch.nn.utils.rnn import pad_sequence
 
 from tqdm import tqdm
@@ -117,7 +118,17 @@ class RewardDataset:
             processed_data = self.__process_prompt_batches(batch)
             dataset.extend(processed_data)
             
-        self.dataset = dataset
+        gathered_data = gather_object(dataset)
+        
+        if self.accelerator.is_main_process:
+            # NOTE: check this
+            # Flatten the list of lists into one big list
+            flat_dataset = [item for sublist in gathered_data for item in sublist]
+            
+            # Use the length of the original dataset to trim off DDP padding
+            # This replaces what gather_for_metrics does automatically for tensors
+            total_samples = len(self.prompt_iterator.dataset)
+            self.dataset = flat_dataset[:total_samples]
             
     def __tokenize_batches(self, prompt_batches):
         
