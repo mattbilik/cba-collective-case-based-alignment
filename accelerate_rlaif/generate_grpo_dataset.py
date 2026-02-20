@@ -373,27 +373,46 @@ class RewardDataset:
                 # Just getting logits like this
                 logits = outputs.logits         
         
+        # Get all batches, and every logit in in each batch item except for the last (the last item, which has yet to be predicted / is empty)
+        shift_logits = logits[:, :-1, :]
+        
+        # Get all batches, and then everything in each batch item from 1 forward
+        # Matching input ids with their associated logits
+        shift_labels = inputs["input_ids"][:, 1:]
+        
+        log_probs = torch.log_softmax(shift_logits, dim=-1)
+        selected_log_probs = torch.gather(
+            log_probs,
+            dim=-1,
+            index=shift_labels.unsqueeze(-1)
+        ).squeeze(-1)
+        
+        positions = torch.arange(selected_log_probs.size(1), device=logits.device).unsqueeze(0)
+        response_mask = positions >= (prompt_plus_padding_lengths - 1).unsqueeze(1)
+        final_log_probs = selected_log_probs * response_mask
+        
         # final prompt token -- i.e. start of prompt and response
         
-        final_log_probs = []
-        for batch_item_logits, start_idx, ids in zip(logits, 
-                                                     prompt_plus_padding_lengths, 
-                                                     inputs["input_ids"]):
+        ##
+        # final_log_probs = []
+        # for batch_item_logits, start_idx, ids in zip(logits, 
+        #                                              prompt_plus_padding_lengths, 
+        #                                              inputs["input_ids"]):
             
-            # From the start of the response to 1 before the end, all items in vectors
-            # Dimension -1, on last dimension (i.e. the items in each vector)
-            log_probs = torch.log_softmax(batch_item_logits[start_idx:-1, :], dim=-1)
+        #     # From the start of the response to 1 before the end, all items in vectors
+        #     # Dimension -1, on last dimension (i.e. the items in each vector)
+        #     log_probs = torch.log_softmax(batch_item_logits[start_idx:-1, :], dim=-1)
             
-            # 1 after the beginning of the response
-            target_ids = ids[start_idx + 1:]
+        #     # 1 after the beginning of the response
+        #     target_ids = ids[start_idx + 1:]
             
-            selected_log_probs = torch.gather(
-                log_probs, -1, target_ids.unsqueeze(-1)).squeeze(-1)
+        #     selected_log_probs = torch.gather(
+        #         log_probs, -1, target_ids.unsqueeze(-1)).squeeze(-1)
             
-            final_log_probs.append(selected_log_probs.sum())
+        #     final_log_probs.append(selected_log_probs.sum())
         
-        print(final_log_probs)
-        
+        # print(final_log_probs)
+        ##
         # local_tensor = torch.stack(final_log_probs)
         # all_gathered_scores = self.accelerator.gather(final_log_probs)
         
