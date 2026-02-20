@@ -24,7 +24,6 @@ from helpers.model_funcs import get_completions
 
 BASE_MODEL = "Qwen/Qwen2-0.5B"
 
-
 # ---- QUANTIZATION CONFIGURATION ----
 # NOTE: Not able to use bf16 because we're using NVIDIA 2080 GPUs
 

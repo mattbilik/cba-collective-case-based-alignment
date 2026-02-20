@@ -3,13 +3,36 @@ import json
 import random
 from hh_preferences.preference_datasets import get_pytorch_iterator
 from accelerate import Accelerator
-from transformers import AutoTokenizer, AutoModelForCausalLM
+from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
 from sentence_transformers import SentenceTransformer
 import torch
 
 from helpers.model_funcs import get_completions
 
 CASE_REGIME = "constitution"
+
+# ---- QUANTIZATION CONFIGURATION ----
+# NOTE: Not able to use bf16 because we're using NVIDIA 2080 GPUs
+
+# Activate 4-bit precision base model loading
+use_4bit = True
+# Compute dtype for 4-bit base models
+bnb_4bit_compute_dtype = "float16"
+# Quantization type (fp4 or nf4)
+bnb_4bit_quant_type = "nf4"
+# Activate nested quantization for 4-bit base models (double quantization)
+use_nested_quant = False
+
+compute_dtype = getattr(torch, bnb_4bit_compute_dtype)
+
+# Fine-tuning on self-revised responses from HH dataset with our constitution
+bnb_config = BitsAndBytesConfig(
+    load_in_4bit=use_4bit,
+    bnb_4bit_quant_type=bnb_4bit_quant_type,
+    bnb_4bit_compute_dtype=compute_dtype,
+    bnb_4bit_use_double_quant=use_nested_quant,
+)
+
 
 # def get_completion(input_ids,
 #                     attention_mask,
@@ -193,10 +216,6 @@ def revise_responses_on_constitution(batch_prompts,
     return responses_to_revise
 
 def run_generation(prompt_iterator, tokenizer, model, accelerator, constitution):
-
-    model, prompt_iterator = accelerator.prepare(model, prompt_iterator)
-    unwrapped_model = accelerator.unwrap_model(model)
-    accelerator.wait_for_everyone()
     
     responses = []
     prompt_idx = 0
@@ -207,7 +226,8 @@ def run_generation(prompt_iterator, tokenizer, model, accelerator, constitution)
         print(f'prompt_idx: {prompt_idx}')
         
         final_completion = revise_responses_on_constitution(batch,
-            unwrapped_model, tokenizer, accelerator, constitution, number_of_revisions=4)
+            model, tokenizer, accelerator, constitution, number_of_revisions=4)
+        
         final_completion = accelerator.gather_for_metrics(final_completion)
         
         responses.extend(final_completion)
@@ -276,11 +296,10 @@ def create_revisions(model_name: str = 'Qwen/Qwen2-7B',
         model = AutoModelForCausalLM.from_pretrained(
                     model_name,
                     dtype=torch.float16,
-                    device_map="auto"
+                    dtype=compute_dtype,
+                    quantization_config=bnb_config
                 )
         
-        # Processing helpfulness, harmfulness dataset from Anthropic
-        # TODO: does this need to be a DataLoader?
         prompt_iterator = get_pytorch_iterator(['hh'],
                                              tokenizer=tokenizer,
                                              split='train',
@@ -300,7 +319,12 @@ def create_revisions(model_name: str = 'Qwen/Qwen2-7B',
                                              sampled_data_dir=None,
                                              text_preprocessing_func = prompt_from_hh_anthropic
         )
-
+        
+    # We are preparing the model and the iterator here for
+    model, prompt_iterator = accelerator.prepare(model, prompt_iterator)
+    model = accelerator.unwrap_model(model)
+    
+    accelerator.wait_for_everyone()
 
     # NOTE: these are the final responses
     final_responses = run_generation(prompt_iterator, tokenizer, model, accelerator, constitution)     
