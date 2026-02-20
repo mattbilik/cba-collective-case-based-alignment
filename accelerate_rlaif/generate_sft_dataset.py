@@ -138,7 +138,14 @@ def tokenize_revision_request(batch_prompts,
         
         revision_requests.append(chat)
         
-    revision_requests = tokenizer.apply_chat_template(revision_requests, tokenize=True)    
+    revision_requests = tokenizer.apply_chat_template(
+            revision_requests,
+            add_generation_prompt=True,
+            return_tensors="pt",
+            padding=True,
+            return_dict=True
+    )  
+      
 
     return revision_requests
 
