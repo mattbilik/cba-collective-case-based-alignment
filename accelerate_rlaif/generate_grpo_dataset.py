@@ -187,6 +187,7 @@ class RewardDataset:
                                     selected_response):
         
         tokenized_preference_pairs = []
+        prompt_lengths = []
         
         for i, batch_prompt in enumerate(batch_prompts):
             response_1 = responses_1[i]
@@ -206,8 +207,22 @@ class RewardDataset:
                 {"role": "user", "content": prompt},
                 {"role": "assistant", "content": selected_response}
             ]
-                        
+                                    
             tokenized_preference_pairs.append(chat)
+            
+            prompt_for_length = [
+                {"role": "user", "content": prompt},
+            ]
+
+            prompt_ids = self.tokenizer.apply_chat_template(
+                prompt_for_length, 
+                add_generation_prompt=True, 
+                return_tensors="pt"
+            )     
+            
+            p_len = prompt_ids.size(1)  
+             
+            prompt_lengths.append(p_len)
             
         tokenized_preference_pairs = self.tokenizer.apply_chat_template(
                                     tokenized_preference_pairs,
@@ -216,7 +231,7 @@ class RewardDataset:
                                     padding=True,
                                     return_dict=True)
 
-        return tokenized_preference_pairs
+        return tokenized_preference_pairs, prompt_lengths
 
     def __generate_log_probs(self, 
                              response_prompts, 
@@ -303,7 +318,7 @@ class RewardDataset:
                                   responses_2,
                                   selected_response):
         
-        tokenized_preference_pairs = self.__tokenize_preference_pairs(prompt_messages,
+        tokenized_preference_pairs, prompt_lengths = self.__tokenize_preference_pairs(prompt_messages,
                                                                 principle,
                                                                 responses_1,
                                                                 responses_2,
@@ -334,18 +349,6 @@ class RewardDataset:
             "attention_mask": tokenized_preference_pairs['attention_mask']
         }
         
-        prompt_lengths = []
-        for batch_item_prompt in prompt_messages:
-            prompt_messages = [{"role": "user", "content": batch_item_prompt}]
-            prompt_ids = self.tokenizer.apply_chat_template(
-                prompt_messages, 
-                add_generation_prompt=True, 
-                return_tensors="pt"
-            )        
-            
-            p_len = prompt_ids.size(1)
-            prompt_lengths.append(p_len)
-
         batch_labels = inputs["input_ids"].clone()
         
         prompt_plus_padding_lengths = inputs["attention_mask"].sum(dim=1).tolist() + prompt_lengths
