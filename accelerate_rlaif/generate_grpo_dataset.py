@@ -63,9 +63,7 @@ class RewardDataset:
                 sft_model,
                 padding_side='left'
             )
-            
-            self.tokenizer.pad_token_id = self.tokenizer.eos_token_id
-            
+                        
             model = AutoModelForCausalLM.from_pretrained(
                 sft_model,
                 dtype=compute_dtype,
@@ -88,6 +86,12 @@ class RewardDataset:
                                                 prefs_path=None, 
                                                 sampled_data_dir=None)
 
+        # Setting the tokenizer settings for each GPU
+        if self.tokenizer.pad_token is None:
+            self.tokenizer.pad_token = self.tokenizer.eos_token
+
+        self.tokenizer.pad_token_id = self.tokenizer.eos_token_id
+        
         model, prompt_iterator = self.accelerator.prepare(model, prompt_iterator)
         self.model = self.accelerator.unwrap_model(model)
         self.prompt_iterator = prompt_iterator
@@ -157,7 +161,9 @@ class RewardDataset:
                                 self.tokenizer,
                                 temperature=1.5)
         
-        responses_1 = self.accelerator.gather_for_metrics(responses_1)
+        # NOTE: do we want to be doing this (i.e. gathering)
+        # I think no?
+        # responses_1 = self.accelerator.gather_for_metrics(responses_1)
         
         responses_2 = get_completions(input_ids,
                                 attention_masks,
@@ -166,7 +172,7 @@ class RewardDataset:
                                 self.tokenizer,
                                 temperature=1.5)
         
-        responses_2 = self.accelerator.gather_for_metrics(responses_2)
+        # responses_2 = self.accelerator.gather_for_metrics(responses_2)
 
         principle = random.choice(self.constitution['principles'])
 
@@ -282,6 +288,8 @@ class RewardDataset:
                 
         assert len(log_probs_1) == len(log_probs_2) == len(response_prompts)
         
+        print(log_probs_1)
+        
         for i, log_prob_1 in enumerate(log_probs_1):
 
             log_prob_2 = log_probs_2[i]
@@ -348,24 +356,24 @@ class RewardDataset:
             "input_ids": tokenized_preference_pairs['input_ids'],
             "attention_mask": tokenized_preference_pairs['attention_mask']
         }
-        
-        batch_labels = inputs["input_ids"].clone()
-        
-        prompt_plus_padding_lengths = inputs["attention_mask"].sum(dim=1).tolist() + prompt_lengths
-        
-        for i, batch_item_label in enumerate(batch_labels):
             
-            prompt_plus_padding_length = prompt_plus_padding_lengths[i]
-            
-            # Ignore all prompt & padding tokens (only interested in A or B log prob)
-            # I.e. mask everything up to prompt_length
-            
-            # For this particular batch item
-            batch_item_label[:prompt_plus_padding_length] = -100
-        
         inputs["input_ids"] = inputs["input_ids"].to(self.accelerator.device)
         inputs["attention_mask"] = inputs["attention_mask"].to(self.accelerator.device)
 
+        prompt_lengths = torch.tensor(prompt_lengths, device=inputs["attention_mask"].device)
+        
+        # We are adding the attention mask (which gives us the prompt + response length)
+        # We only want to get the logits associated with the response, though
+        
+        length_of_prompt_and_output = inputs["attention_mask"].sum(dim=1)
+        
+        # Size of tensors
+        total_lengths_of_tensors = inputs["attention_mask"].size(1)
+    
+        padding_length = total_lengths_of_tensors - length_of_prompt_and_output
+        
+        starting_positions = (padding_length + prompt_lengths) - 1
+        
         with torch.inference_mode():
                 # not passing labels for mem savings
                 outputs = self.model(
@@ -391,8 +399,10 @@ class RewardDataset:
         ).squeeze(-1)
         
         positions = torch.arange(selected_log_probs.size(1), device=logits.device).unsqueeze(0)
-        response_mask = positions >= (prompt_plus_padding_lengths - 1).unsqueeze(1)
+        response_mask = positions >= starting_positions.unsqueeze(1)
         final_log_probs = selected_log_probs * response_mask
+        
+        final_log_probs = final_log_probs.sum(dim=1)
         
         # final prompt token -- i.e. start of prompt and response
         

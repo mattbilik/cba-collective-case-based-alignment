@@ -34,7 +34,6 @@ bnb_config = BitsAndBytesConfig(
     bnb_4bit_use_double_quant=use_nested_quant,
 )
 
-
 # def get_completion(input_ids,
 #                     attention_mask,
 #                     model,

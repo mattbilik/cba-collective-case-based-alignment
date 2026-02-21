@@ -9,11 +9,12 @@ def get_completions(input_ids,
                     temperature=1,
                     max_new_tokens=200):
         
+    # Already paddded, tokenized batch items:
+    prompt_lengths = input_ids.shape[1]
+    
     input_ids = input_ids.to(accelerator.device)
     attention_mask = attention_mask.to(accelerator.device)
-        
-    prompt_lengths = attention_mask.sum(dim=1)
-    
+            
     print(f"Model device: {model.device}\nInput device {input_ids.device}")
     
     with torch.inference_mode():    
@@ -22,19 +23,12 @@ def get_completions(input_ids,
             max_new_tokens=max_new_tokens,
             do_sample=True,
             temperature=temperature,
-            pad_token_id=tokenizer.pad_token_id or tokenizer.eos_token_id
+            pad_token_id=tokenizer.pad_token_id,
+            eos_token_id=tokenizer.eos_token_id,
+            attention_mask=attention_mask
         )
         
-    responses = []
-    
-    for i, length in enumerate(prompt_lengths):
-        response = output[i][length:]
-        responses.append(response)
-    
-    responses = pad_sequence(responses, 
-                             batch_first=True, 
-                             padding_value=tokenizer.pad_token_id)
-    
+    responses = output[:, prompt_lengths:]    
     responses = tokenizer.batch_decode(responses)
             
     return responses
