@@ -761,6 +761,7 @@ def get_pytorch_iterator(names: List[str],
                          max_prompt_length: int = 128,
                          silent: bool = False,
                          cache_dir: Optional[str] = None,
+                         num_examples: Optional[int] = None,
                          **kwargs) -> DataLoader:
     
     collate_fn = get_collate_fn_dataloader(tokenizer,
@@ -777,7 +778,12 @@ def get_pytorch_iterator(names: List[str],
     
     rows = []
     
+    if num_examples is None:
+        num_examples = len(hf_dataset)
+    
     for prompt_text, data in tqdm.tqdm(hf_dataset.items(), desc='Processing list conversion', disable=silent):
+        if len(rows) >= num_examples:
+            break
         rows.append({
             "prompt": prompt_text,
             "data": {

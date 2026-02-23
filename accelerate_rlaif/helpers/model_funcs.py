@@ -8,6 +8,18 @@ def get_completions(input_ids,
                     tokenizer,
                     temperature=1,
                     max_new_tokens=200):
+    
+    """
+    Docstring for get_completions
+    
+    :param input_ids: Description
+    :param attention_mask: Description
+    :param model: Description
+    :param accelerator: Description
+    :param tokenizer: Description
+    :param temperature: Description
+    :param max_new_tokens: Description
+    """ 
         
     # Already paddded, tokenized batch items:
     prompt_lengths = input_ids.shape[1]
@@ -29,6 +41,6 @@ def get_completions(input_ids,
         )
         
     responses = output[:, prompt_lengths:]    
-    responses = tokenizer.batch_decode(responses)
+    responses = tokenizer.batch_decode(responses, skip_special_tokens=True)
             
     return responses

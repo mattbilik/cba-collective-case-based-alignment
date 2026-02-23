@@ -1,6 +1,7 @@
 import os
 import json
 import random
+import sys
 from hh_preferences.preference_datasets import get_pytorch_iterator
 from accelerate import Accelerator
 from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
@@ -9,6 +10,7 @@ import torch
 
 from helpers.model_funcs import get_completions
 from helpers.accelerate_funcs import gather_iterator_batches
+from tqdm import tqdm
 
 CASE_REGIME = "constitution"
 
@@ -105,6 +107,8 @@ def tokenize_chat_history(batch_prompts,
     
     batch_chats = []
     
+    # print(f"Batch prompts: {batch_prompts}")
+    
     for batch_prompt in batch_prompts:
         chat_for_one_prompt = get_all_turns_and_format(batch_prompt)
         batch_chats.append(chat_for_one_prompt)
@@ -169,7 +173,10 @@ def revise_responses_on_constitution(batch_prompts,
     Returns:
         str: The revised response after applying the constitution principles.
     """
+    
+    batch_prompts = batch_prompts['prompt']
 
+    # Get initial completions for the batch of prompts
     revision_instructions = random.choice(constitution['principles'])
     random_principle = revision_instructions['description']
         
@@ -179,9 +186,12 @@ def revise_responses_on_constitution(batch_prompts,
     attention_mask = tokenized_batch_prompts['attention_mask']
     
     initial_completions = get_completions(
-        input_ids, attention_mask, model, accelerator)
+        input_ids, attention_mask, model, accelerator, tokenizer
+    )
        
     responses_to_revise = initial_completions
+    
+    print(f"Initial completions: {responses_to_revise}" )
     
     """
     User: lorem ipsum
@@ -231,7 +241,7 @@ def run_generation(prompt_iterator, tokenizer, model, accelerator, constitution)
     responses = []
     prompt_idx = 0
 
-    for batch in prompt_iterator:
+    for batch in tqdm(prompt_iterator, desc="Processing batches"):
         prompt_idx += 1
         print(f' Processing batch: {prompt_idx}')
         print(f'prompt_idx: {prompt_idx}')
@@ -243,7 +253,9 @@ def run_generation(prompt_iterator, tokenizer, model, accelerator, constitution)
         
         responses.extend(final_completion)
         
-    responses = gather_iterator_batches(responses)
+    responses = gather_iterator_batches(responses,
+                                        accelerator,
+                                        prompt_iterator)
     
     return responses
 
@@ -259,58 +271,58 @@ def dump_files(responses, base_output_dir):
     print('Saved to file')
 
 def create_revisions(model_name: str = 'Qwen/Qwen2-7B',
-                     constitution_path: str = 'constitution.json'):
+                     constitution: dict = None,
+                     accelerator: Accelerator = None,
+                     num_completions: int = 100):
     
     #need to expand this out into different sections?
     
     args = {
         # This magic number is from the Anthropic CAI paper
         # "num_completions": 182831,
-        "num_completions": 100,
+        "num_completions": num_completions,
         "ai_model": f"{model_name}",
         "base_output_dir": f"{os.getenv('PROJECT_CACHE', '~/.cache')}/hh_data",
         "cache_dir": os.getenv("PROJECT_CACHE", "~/.cache"),
         "data_fraction": 1.0,
         "ff": 1,
-        "constitution": constitution_path,
+        # "constitution": constitution_path,
     }
 
-    with open(constitution_path, 'r') as f:
-        constitution = json.load(f)
-
-    # Limit number of completions if specified
-    if args["num_completions"] <= 0:
-        raise ValueError(
-            'num_completions must be positive integer that is greater than 0')
-
-    if CASE_REGIME == "case":
-        print("Using CASE-based revision regime.")   
+    # Print the current working directory
+    with accelerator.main_process_first():
+        print("Current working directory:", os.getcwd())
         
-        #TO-DO: Parallelize this as well?
-        embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
-        
-        for principle in constitution['principles']:
-            print(f"Principle: {principle['principle']}")
-            embeddings = embedding_model.encode(principle['cases'])
-            principle['case_embeddings'] = embeddings
+        # Limit number of completions if specified
+        if args["num_completions"] <= 0:
+            raise ValueError(
+                'num_completions must be positive integer that is greater than 0')
+
+        if CASE_REGIME == "case":
+            print("Using CASE-based revision regime.")   
+            
+            #TO-DO: Parallelize this as well?
+            embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
+            
+            for principle in constitution['principles']:
+                print(f"Principle: {principle['principle']}")
+                embeddings = embedding_model.encode(principle['cases'])
+                principle['case_embeddings'] = embeddings
+                    
+        elif CASE_REGIME == "constitution":
+            print("Using CONSTITUTION-based revision regime.") 
                 
-    elif CASE_REGIME == "constitution":
-        print("Using CONSTITUTION-based revision regime.") 
-        
     # Use Qwen for tokenizing prompts from Anthropic helpfulness dataset Qwen/Qwen2-7B
     # tokenizer = AutoTokenizer.from_pretrained(
     #     'Qwen/Qwen2-1.5B')
-
-    accelerator = Accelerator()
     
-    with accelerator.main_process_first():
-        tokenizer = AutoTokenizer.from_pretrained(model_name)
+        tokenizer = AutoTokenizer.from_pretrained(model_name,
+                                                  padding_side='left')
         tokenizer.pad_token_id = tokenizer.eos_token_id
         model = AutoModelForCausalLM.from_pretrained(
                     model_name,
-                    dtype=torch.float16,
                     dtype=compute_dtype,
-                    quantization_config=bnb_config
+                    quantization_config=bnb_config,
                 )
         
         prompt_iterator = get_pytorch_iterator(['hh'],
@@ -330,7 +342,8 @@ def create_revisions(model_name: str = 'Qwen/Qwen2-7B',
                                              data_fraction=args["data_fraction"],
                                              prefs_path=None,
                                              sampled_data_dir=None,
-                                             text_preprocessing_func = prompt_from_hh_anthropic
+                                             text_preprocessing_func = prompt_from_hh_anthropic,
+                                             num_examples = args["num_completions"],
         )
         
     # We are preparing the model and the iterator here for
@@ -350,4 +363,22 @@ def create_revisions(model_name: str = 'Qwen/Qwen2-7B',
         dump_files(final_responses, args['base_output_dir'])
     
 if __name__ == "__main__":
-    create_revisions()
+    
+    model_name = sys.argv[1]
+    constitution_path = sys.argv[2]
+    num_completions = int(sys.argv[3])
+    
+    accelerator = Accelerator()
+    
+    with accelerator.main_process_first():
+        constitution_folder = os.path.join(os.path.dirname(__file__), 'constitutions')
+        os.makedirs(constitution_folder, exist_ok=True)
+        constitution_file_path = os.path.join(constitution_folder, os.path.basename(constitution_path))
+
+        with open(constitution_file_path, 'r') as f:
+            constitution = json.load(f)
+    
+    create_revisions(model_name, 
+                     constitution,
+                     accelerator,
+                     num_completions)

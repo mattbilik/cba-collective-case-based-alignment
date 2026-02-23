@@ -84,13 +84,15 @@ class RewardDataset:
                                                 num_turns=1, 
                                                 data_fraction=1, 
                                                 prefs_path=None, 
-                                                sampled_data_dir=None)
+                                                sampled_data_dir=None,
+                                                num_examples=constitutionally_generated_harmlessness_comparisons
+                                            )
 
-        # Setting the tokenizer settings for each GPU
-        if self.tokenizer.pad_token is None:
-            self.tokenizer.pad_token = self.tokenizer.eos_token
+            # Setting the tokenizer settings for each GPU
+            if self.tokenizer.pad_token is None:
+                self.tokenizer.pad_token = self.tokenizer.eos_token
 
-        self.tokenizer.pad_token_id = self.tokenizer.eos_token_id
+            self.tokenizer.pad_token_id = self.tokenizer.eos_token_id
         
         model, prompt_iterator = self.accelerator.prepare(model, prompt_iterator)
         self.model = self.accelerator.unwrap_model(model)
@@ -99,7 +101,7 @@ class RewardDataset:
         self.accelerator.wait_for_everyone()
         
         self.constitution = constitution
-        self.num_samples = constitutionally_generated_harmlessness_comparisons
+        # self.num_samples = constitutionally_generated_harmlessness_comparisons
 
         self.__generate_completions_and_scores()
 
@@ -122,7 +124,9 @@ class RewardDataset:
             processed_data = self.__process_prompt_batches(batch)
             dataset.extend(processed_data)
             
-        self.dataset = gather_iterator_batches(dataset)
+        self.dataset = gather_iterator_batches(dataset,
+                                               self.accelerator,
+                                               self.prompt_iterator)
             
     def __tokenize_batches(self, prompt_batches):
         
