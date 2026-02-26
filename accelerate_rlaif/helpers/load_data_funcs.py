@@ -100,8 +100,11 @@ def load_dataset_from_path(dataset_path: str):
     
     dataset_path = os.path.join(root_dir, 'local_datasets', dataset_path)
     
+    print(f"Loading dataset from: {dataset_path}")
     with open(dataset_path, 'r') as f:
         data = json.load(f)
+
+    print(data)
         
     dataset = Dataset.from_list(data)
         
