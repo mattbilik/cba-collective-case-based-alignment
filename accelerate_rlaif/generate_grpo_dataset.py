@@ -22,6 +22,7 @@ from accelerate.parallelism_config import ParallelismConfig
 from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
 
 from helpers.model_funcs import get_completions
+from peft import LoraConfig, get_peft_model
 
 BASE_MODEL = "Qwen/Qwen2-0.5B"
 
@@ -60,16 +61,28 @@ class RewardDataset:
         # NOTE: the padding side is specified as left because we're generating content
         with self.accelerator.main_process_first():
             self.tokenizer = AutoTokenizer.from_pretrained(
-                sft_model,
-                padding_side='left'
-            )
-                        
+                            sft_model,
+                            padding_side='left'
+                        )
+                                    
             model = AutoModelForCausalLM.from_pretrained(
-                sft_model,
-                dtype=compute_dtype,
-                quantization_config=bnb_config
+                            sft_model,
+                            dtype=compute_dtype,
+                            quantization_config=bnb_config
+                        )
+
+            # ---- (testing this out)
+            # Apply Low-Rank Adaptation (LoRA)
+            lora_config = LoraConfig(
+                r=8,  # Rank of the low-rank decomposition
+                lora_alpha=32,  # Scaling factor
+                target_modules=["q_proj", "v_proj"],  # Target modules to apply LoRA
+                lora_dropout=0.1,  # Dropout probability
+                bias="none"  # Bias handling
             )
-                    
+            model = get_peft_model(model, lora_config) 
+            # ----
+            
             prompt_iterator = get_pytorch_iterator(['hh'], 
                                                 tokenizer=self.tokenizer, 
                                                 split='train', 
@@ -312,11 +325,13 @@ class RewardDataset:
                 rejected_response = response_1
                 log_prob = log_prob_2
                 
-            row_item =  {
+            row_item = {
                 "prompt": prompt,
                 "chosen": chosen_response,
                 "rejected": rejected_response,
-                "margin": log_prob 
+                
+                # Making the log probs floats so they're serializable
+                "margin": log_prob.item()
             }
    
             list_of_rows.append(row_item)
@@ -486,8 +501,10 @@ if __name__ == '__main__':
     
     sft_model_path_or_name = sys.argv[1]
     constitution_path = sys.argv[2]
-    constitutionally_generated_harmlessness_comparisons = sys.argv[3]
+    constitutionally_generated_harmlessness_comparisons = int(sys.argv[3]) 
     test_mode = sys.argv[4]
+    
+    print(f"Arguments received:\nSFT Model Path or Name: {sft_model_path_or_name}\nConstitution Path: {constitution_path}\nNumber of Constitutionally Generated Harmlessness Comparisons: {constitutionally_generated_harmlessness_comparisons}\nTest Mode: {test_mode}")
     
     accelerator = Accelerator()
     

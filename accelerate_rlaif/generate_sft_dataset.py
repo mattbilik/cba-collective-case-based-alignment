@@ -2,11 +2,13 @@ import os
 import json
 import random
 import sys
+import time
 from hh_preferences.preference_datasets import get_pytorch_iterator
 from accelerate import Accelerator
 from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
 from sentence_transformers import SentenceTransformer
 import torch
+import torch.distributed as dist
 
 from helpers.model_funcs import get_completions
 from helpers.accelerate_funcs import gather_iterator_batches
@@ -185,6 +187,9 @@ def revise_responses_on_constitution(batch_prompts,
     input_ids = tokenized_batch_prompts['input_ids']
     attention_mask = tokenized_batch_prompts['attention_mask']
     
+    # INITIAL COMPLETIONS
+    print("Generating initial completions for the batch of prompts:\n")
+    
     initial_completions = get_completions(
         input_ids, attention_mask, model, accelerator, tokenizer
     )
@@ -202,6 +207,8 @@ def revise_responses_on_constitution(batch_prompts,
     Assistant: ... initial completion
             
     """
+    
+    print("Generating revisions for the batch of prompts:\n")
         
     # NOTE: this is doing revisions
     for _ in range(number_of_revisions):      
@@ -241,21 +248,34 @@ def run_generation(prompt_iterator, tokenizer, model, accelerator, constitution)
     responses = []
     prompt_idx = 0
 
+    # batch number (e.g. 4) batch items per batch
     for batch in tqdm(prompt_iterator, desc="Processing batches"):
         prompt_idx += 1
         print(f' Processing batch: {prompt_idx}')
         print(f'prompt_idx: {prompt_idx}')
         
+        start_time = time.time()
+        
         final_completion = revise_responses_on_constitution(batch,
             model, tokenizer, accelerator, constitution, number_of_revisions=4)
         
+        end_time = time.time()
+        elapsed_time = end_time - start_time
+        print(f"Time taken for batch {prompt_idx}: {elapsed_time:.2f} seconds")
+        
         # final_completion = accelerator.gather_for_metrics(final_completion)
         
-        responses.extend(final_completion)
+        # Append each completion with its corresponding prompt
+        for i, completion in enumerate(final_completion):
+            responses.append({
+                "prompt": batch["prompt"][i],
+                "completion": completion
+            })
         
+    # print(f"Responses before gathering: {responses}")
     responses = gather_iterator_batches(responses,
                                         accelerator,
-                                        prompt_iterator)
+                                        prompt_iterator)    
     
     return responses
 
@@ -355,20 +375,26 @@ def create_revisions(model_name: str = 'Qwen/Qwen2-7B',
     # NOTE: these are the final responses
     final_responses = run_generation(prompt_iterator, tokenizer, model, accelerator, constitution)     
     
-    dump_files(final_responses, args['base_output_dir'])
+    # dump_files(final_responses, args['base_output_dir'])
     
     accelerator.wait_for_everyone()
 
-    if accelerator.is_local_main_process:
-        dump_files(final_responses, args['base_output_dir'])
+    return final_responses
+    # if accelerator.is_local_main_process:
+    #     dump_files(final_responses, args['base_output_dir'])
     
 if __name__ == "__main__":
     
     model_name = sys.argv[1]
     constitution_path = sys.argv[2]
     num_completions = int(sys.argv[3])
+    sft_dataset_path = sys.argv[4]
     
     accelerator = Accelerator()
+
+    if accelerator.is_local_main_process:
+        start_time = time.time()
+        data_parallel_degree = torch.cuda.device_count()
     
     with accelerator.main_process_first():
         constitution_folder = os.path.join(os.path.dirname(__file__), 'constitutions')
@@ -377,8 +403,26 @@ if __name__ == "__main__":
 
         with open(constitution_file_path, 'r') as f:
             constitution = json.load(f)
-    
-    create_revisions(model_name, 
+        
+
+    dataset = create_revisions(model_name, 
                      constitution,
                      accelerator,
                      num_completions)
+    
+    if accelerator.is_local_main_process:
+        print(dataset)
+        
+        # Add to the datasets folder
+        dataset_folder = os.path.join(os.path.dirname(__file__), 'local_datasets')
+        os.makedirs(dataset_folder, exist_ok=True)
+        
+        file_path = os.path.join(dataset_folder, sft_dataset_path)
+
+        with open(file_path, 'w', encoding='utf-8') as f:
+            json.dump(dataset, f, indent=4)
+            
+        print(f"Time difference: {(time.time() - start_time) / 60} minutes")
+
+        if dist.is_initialized():
+            dist.destroy_process_group()

@@ -1,7 +1,7 @@
 import torch
 import sys
 from peft import LoraConfig, TaskType
-from transformers import AutoModelForSequenceClassification, AutoTokenizer, PretrainedConfig
+from transformers import AutoModelForSequenceClassification, AutoTokenizer, PretrainedConfig, BitsAndBytesConfig
 from trl import GRPOTrainer, GRPOConfig
 from datasets import Dataset
 
@@ -12,6 +12,7 @@ from accelerate import Accelerator
 import time
 
 from helpers.load_data_funcs import load_dataset_from_path
+import json
 
 """
 1. Use SFT'd model to generate pairs for RLAIF.
@@ -28,10 +29,27 @@ FINAL_MODEL_NAME = "/models/grpo_model_constitution_FINAL"
 OUTPUT_DIR = "./grpo_model_constitution_checkpoints"
 REWARD_MODEL_PATH = "models/final_reward_model"
 
-# reward_model = AutoModelForSequenceClassification.from_pretrained("distilbert/distilbert-base-uncased", num_labels=2).to("cpu")
+# ---- QUANTIZATION CONFIGURATION ----
+# NOTE: Not able to use bf16 because we're using NVIDIA 2080 GPUs
 
-# for param in reward_model.parameters():
-#     param.requires_grad = False
+# Activate 4-bit precision base model loading
+use_4bit = True
+# Compute dtype for 4-bit base models
+bnb_4bit_compute_dtype = "float16"
+# Quantization type (fp4 or nf4)
+bnb_4bit_quant_type = "nf4"
+# Activate nested quantization for 4-bit base models (double quantization)
+use_nested_quant = False
+
+compute_dtype = getattr(torch, bnb_4bit_compute_dtype)
+
+# Fine-tuning on self-revised responses from HH dataset with our constitution
+bnb_config = BitsAndBytesConfig(
+    load_in_4bit=use_4bit,
+    bnb_4bit_quant_type=bnb_4bit_quant_type,
+    bnb_4bit_compute_dtype=compute_dtype,
+    bnb_4bit_use_double_quant=use_nested_quant,
+)
 
 def train_with_grpo(dataset: Dataset,
                     accelerator: Accelerator,
@@ -75,7 +93,7 @@ def train_with_grpo(dataset: Dataset,
         output_dir=output_directory,
         per_device_train_batch_size=1,
         gradient_accumulation_steps=8,
-        num_train_epochs=1000,
+        num_train_epochs=3,
         fp16=True,
         bf16=False,
         save_strategy="no",
@@ -101,16 +119,29 @@ def train_with_grpo(dataset: Dataset,
         processing_class=reward_tokenizer,
     )
     
-    # grpo_trainer.model.config.use_cache = False
-    
-    grpo_trainer.train()
-    
-    # accelerator.wait_for_everyone()
-    
-    final_model = grpo_trainer.model.merge_and_unload()
+    grpo_trainer.model.quantization_config = bnb_config
         
-    final_model = accelerator.unwrap_model(final_model.model)
+    grpo_trainer.train()
+    accelerator.wait_for_everyone()
+    
+    if accelerator.is_local_main_process: 
+    
+        grpo_log = grpo_trainer.state.log_history
+        
+        # Save the GRPO log
+        log_path = os.path.join(output_directory, "grpo_log.json")
+        if accelerator.is_local_main_process:
+            with open(log_path, "w") as log_file:
+                json.dump(grpo_log, log_file, indent=4)
+    
+    
+    final_model = accelerator.unwrap_model(grpo_trainer.model)
     final_model = final_model.merge_and_unload()
+    
+    # final_model = grpo_trainer.model.merge_and_unload()
+        
+    # final_model = accelerator.unwrap_model(final_model.model)
+    # final_model = final_model.merge_and_unload()
 
     if accelerator.is_local_main_process: 
         # Save the final reward model
