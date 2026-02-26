@@ -11,6 +11,11 @@ import socket
 import os
 from typing import Dict, Union, Type, List
 
+def prompt_from_hh_anthropic(instruction):
+    # Extract the first human prompt before the assistant response to make all data 1-turn (e.g. "Hi, I want to learn to play horseshoes. Can you teach me?")
+    relevant_instruction = instruction.partition(
+        '\n\nAssistant:')[0].partition('Human:')[2].strip()
+    return relevant_instruction
 
 def get_remote_file(remote_path, local_path=None):
     hostname, path = remote_path.split(':')

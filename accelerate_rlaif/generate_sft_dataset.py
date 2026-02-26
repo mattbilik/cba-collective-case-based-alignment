@@ -3,6 +3,7 @@ import json
 import random
 import sys
 from hh_preferences.preference_datasets import get_pytorch_iterator
+from hh_preferences.utils import prompt_from_hh_anthropic
 from accelerate import Accelerator
 from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
 from sentence_transformers import SentenceTransformer
@@ -258,12 +259,6 @@ def run_generation(prompt_iterator, tokenizer, model, accelerator, constitution)
                                         prompt_iterator)
     
     return responses
-
-def prompt_from_hh_anthropic(instruction):
-    # Extract the first human prompt before the assistant response to make all data 1-turn (e.g. "Hi, I want to learn to play horseshoes. Can you teach me?")
-    relevant_instruction = instruction.partition(
-        '\n\nAssistant:')[0].partition('Human:')[2].strip()
-    return relevant_instruction
 
 def dump_files(responses, base_output_dir):
     with open(os.path.join(base_output_dir, f'hh_anthropic_1turn_df_completions_many.json'), 'w+') as f:

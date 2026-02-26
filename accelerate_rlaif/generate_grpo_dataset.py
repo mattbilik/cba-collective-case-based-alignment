@@ -95,7 +95,7 @@ class RewardDataset:
             self.tokenizer.pad_token_id = self.tokenizer.eos_token_id
         
         model, prompt_iterator = self.accelerator.prepare(model, prompt_iterator)
-        self.model = self.accelerator.unwrap_model(model)
+        self.model = model
         self.prompt_iterator = prompt_iterator
         
         self.accelerator.wait_for_everyone()
