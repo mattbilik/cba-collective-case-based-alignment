@@ -368,7 +368,6 @@ def create_revisions(model_name: str = 'Qwen/Qwen2-7B',
         
     # We are preparing the model and the iterator here for
     model, prompt_iterator = accelerator.prepare(model, prompt_iterator)
-    model = accelerator.unwrap_model(model)
     
     accelerator.wait_for_everyone()
 
