@@ -61,20 +61,19 @@ class CustomRLAIFModel(DeepEvalBaseLLM):
         
     #     return self.tokenizer.decode(outputs[0], skip_special_tokens=True)
 
-    def generate(self, prompt: str, schema: BaseModel, device: str) -> BaseModel:
+    def generate(self, prompt: str, schema: BaseModel) -> BaseModel:
                 
-        model, pipeline, tokenizer = self.gpu_manager.get_resources(device)
         pipeline = transformers.pipeline(
             "text-generation",
-            model=model,
-            tokenizer=tokenizer,
+            model=self.model,
+            tokenizer=self.tokenizer,
             use_cache=True,
             max_length=2500,
             do_sample=True,
             top_k=5,
             num_return_sequences=1,
-            eos_token_id=tokenizer.eos_token_id,
-            pad_token_id=tokenizer.eos_token_id,
+            eos_token_id=self.tokenizer.eos_token_id,
+            pad_token_id=self.tokenizer.eos_token_id,
         )
 
         # Create parser required for JSON confinement using lmformatenforcer
@@ -90,16 +89,9 @@ class CustomRLAIFModel(DeepEvalBaseLLM):
 
         # Return valid JSON object according to the schema DeepEval supplied
         return schema(**json_result)
-
-    # def batch_generate(self, prompts: List[str]) -> List[str]:
-    #     model = self.load_model()
-    #     device = "cuda" # the device to load the model onto
-
-    #     model_inputs = self.tokenizer(prompts, return_tensors="pt").to(device)
-    #     model.to(device)
-
-    #     generated_ids = model.generate(**model_inputs, max_new_tokens=100, do_sample=True)
-    #     return self.tokenizer.batch_decode(generated_ids)
+    
+    def a_generate(self, prompt: str, schema: BaseModel) -> BaseModel:
+        return self.generate(prompt, schema)
 
     def get_model_name(self):
         return self.model_path
@@ -149,6 +141,7 @@ def test_deepeval_benchmarks(model_name, base_model_name) -> int:
         tasks=[MMLUTask.HIGH_SCHOOL_MATHEMATICS],
         n_shots=5
     )
+    
     mmlu_benchmark.evaluate(model=model_to_test, run_async=True)
     
     print("MMLU Benchmark Results:")
