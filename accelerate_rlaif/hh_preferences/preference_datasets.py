@@ -1,7 +1,7 @@
 import datasets
 import torch
-from torch.utils.data import DataLoader, Dataset
-from utils import get_local_dir, TemporarilySeededRandom
+from torch.utils.data import DataLoader
+from .utils import get_local_dir, TemporarilySeededRandom
 from torch.nn.utils.rnn import pad_sequence
 from collections import defaultdict
 import tqdm
@@ -624,6 +624,68 @@ def get_collate_fn(tokenizer) -> Callable[[List[Dict]], Dict[str, Union[List, to
     return collate_fn
 
 
+def get_collate_fn_dataloader(tokenizer,
+                              max_length,
+                              max_prompt_length) -> Callable[[List[Dict]], Dict[str, Union[List, torch.Tensor]]]:
+    """Returns a collate function for the given tokenizer.
+    
+       The collate function takes a list of examples (dicts, where values are lists of
+       ints [tokens] or strings [the original texts]) and returns a batch of examples,
+       PyTorch tensors padded to the maximum length. Strings are passed through."""
+
+    def collate_fn(batch):
+    
+        truncation_mode = "keep_end"
+        
+        # print(batch)
+        
+        tokenized_batch = []
+        
+        for batch_element in batch:
+            
+            sft_target = batch_element['data']['sft_target']
+            prompt = batch_element['prompt']
+            
+            tokenized_batch.append(tokenize_batch_element(prompt, 
+                                                          sft_target, 
+                                                          sft_target, 
+                                                          truncation_mode, 
+                                                          tokenizer, 
+                                                          max_length, 
+                                                          max_prompt_length))
+            
+        batch = tokenized_batch
+        
+        # first, pad everything to the same length
+        padded_batch = {}
+        for k in batch[0].keys():
+            if k.endswith('_input_ids') or k.endswith('_attention_mask') or k.endswith('_labels'):
+                if 'prompt' in k:  # adapted from https://stackoverflow.com/questions/73256206
+                    to_pad = [torch.LongTensor(ex[k][::-1]) for ex in batch]
+                else:
+                    to_pad = [torch.LongTensor(ex[k]) for ex in batch]
+                if k.endswith('_input_ids'):
+                    padding_value = tokenizer.pad_token_id
+                elif k.endswith('_labels'):
+                    padding_value = -100
+                elif k.endswith('_attention_mask'):
+                    padding_value = 0
+                else:
+                    raise ValueError(f"Unexpected key in batch '{k}'")
+
+                padded_batch[k] = pad_sequence(to_pad, batch_first=True, padding_value=padding_value)
+                if 'prompt' in k:  # for the prompt, flip back so padding is on left side
+                    padded_batch[k] = padded_batch[k].flip(dims=[1])
+            else:
+                padded_batch[k] = [ex[k] for ex in batch]
+                
+            # print(padded_batch)
+
+        return padded_batch
+    
+    
+    return collate_fn
+
 def tokenize_batch_element(prompt: str, chosen: str, rejected: str, truncation_mode: str, tokenizer, max_length: int, max_prompt_length: int) -> Dict:
     """Tokenize a single batch element.
     
@@ -689,6 +751,60 @@ def tokenize_batch_element(prompt: str, chosen: str, rejected: str, truncation_m
 
     return batch
 
+
+def get_pytorch_iterator(names: List[str],
+                         tokenizer,
+                         split: str = 'train',
+                         batch_size: int = 1,
+                         shuffle: bool = True,
+                         max_length: int = 512,
+                         max_prompt_length: int = 128,
+                         silent: bool = False,
+                         cache_dir: Optional[str] = None,
+                         num_examples: Optional[int] = None,
+                         **kwargs) -> DataLoader:
+    
+    collate_fn = get_collate_fn_dataloader(tokenizer,
+                                           max_length,
+                                           max_prompt_length)
+    
+    name = names[0]
+    
+    hf_dataset = get_dataset(name, 
+                             split, 
+                             silent=silent, 
+                             cache_dir=cache_dir,
+                             **kwargs)
+    
+    rows = []
+    
+    if num_examples is None:
+        num_examples = len(hf_dataset)
+    
+    for prompt_text, data in tqdm.tqdm(hf_dataset.items(), desc='Processing list conversion', disable=silent):
+        if len(rows) >= num_examples:
+            break
+        rows.append({
+            "prompt": prompt_text,
+            "data": {
+                "responses": data["responses"],
+                "pairs": data["pairs"],
+                "sft_target": data["sft_target"]
+            }
+        })
+        
+    # print(f"Dataset type: {type(hf_dataset)}")
+    
+    hf_dataset = datasets.Dataset.from_list(rows)
+    
+    print("\nPassing dataset to dataloader...")
+    
+    dataloader = DataLoader(hf_dataset, 
+                            batch_size=batch_size,
+                            collate_fn=collate_fn,
+                            shuffle=shuffle)
+    
+    return dataloader
 
 def get_batch_iterator(names: List[str],
                        tokenizer,

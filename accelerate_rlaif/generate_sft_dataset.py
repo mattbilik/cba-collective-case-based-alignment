@@ -1,0 +1,428 @@
+import os
+import json
+import random
+import sys
+import time
+from hh_preferences.preference_datasets import get_pytorch_iterator
+from accelerate import Accelerator
+from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
+from sentence_transformers import SentenceTransformer
+import torch
+import torch.distributed as dist
+
+from helpers.model_funcs import get_completions
+from helpers.accelerate_funcs import gather_iterator_batches
+from tqdm import tqdm
+
+CASE_REGIME = "constitution"
+
+# ---- QUANTIZATION CONFIGURATION ----
+# NOTE: Not able to use bf16 because we're using NVIDIA 2080 GPUs
+
+# Activate 4-bit precision base model loading
+use_4bit = True
+# Compute dtype for 4-bit base models
+bnb_4bit_compute_dtype = "float16"
+# Quantization type (fp4 or nf4)
+bnb_4bit_quant_type = "nf4"
+# Activate nested quantization for 4-bit base models (double quantization)
+use_nested_quant = False
+
+compute_dtype = getattr(torch, bnb_4bit_compute_dtype)
+
+# Fine-tuning on self-revised responses from HH dataset with our constitution
+bnb_config = BitsAndBytesConfig(
+    load_in_4bit=use_4bit,
+    bnb_4bit_quant_type=bnb_4bit_quant_type,
+    bnb_4bit_compute_dtype=compute_dtype,
+    bnb_4bit_use_double_quant=use_nested_quant,
+)
+
+# def get_completion(input_ids,
+#                     attention_mask,
+#                     model,
+#                     accelerator,
+#                     tokenizer,
+#                     max_new_tokens=200):
+        
+#     input_ids.to(accelerator.device)
+#     prompt_lengths = attention_mask.sum(dim=1)
+    
+#     with torch.inference_mode():    
+#         output = model.generate(
+#              input_ids,
+#              max_new_tokens=max_new_tokens,
+#              do_sample=True,
+#              temperature=1.0,
+#              pad_token_id=tokenizer.pad_token_id or tokenizer.eos_token_id
+#         )
+        
+#     responses = []
+    
+#     for i, length in enumerate(prompt_lengths):
+#         response = output[i][length:]
+#         responses.append(response)
+    
+#     responses = pad_sequence(responses, batch_first=True, 
+#                              padding_value=tokenizer.pad_token_id)
+    
+#     responses = tokenizer.decode(responses)
+            
+#     return responses
+
+def get_all_turns_and_format(dialogue: str) -> list[str, str]:
+    
+    """
+    Docstring for get_all_turns_and_format
+    
+    :param dialogue: the string dialogue we want to convert into HF conversation format
+    :type dialogue: str
+    :return: Description
+    :rtype: list[str]
+    """
+
+    # Extract all human and assistant responses as list pairs
+    dialogue_pairs = []
+    dialogue = dialogue.split('\n\n')
+        
+    for i in range(0, len(dialogue) - 1, 1):
+        if dialogue[i].startswith('Human:'):
+            human_response = dialogue[i].partition('Human:')[2].strip()
+            dialogue_pairs.append({'role': 'user', 'content': human_response})
+        elif dialogue[i].startswith('Assistant:'):
+            assistant_response = dialogue[i].partition('Assistant:')[2].strip()
+            
+            if assistant_response != '':
+                dialogue_pairs.append({'role': 'assistant', 'content': assistant_response})
+
+    print(f"DIALOGUE PAIRS: {dialogue_pairs}")
+    
+    return dialogue_pairs
+
+def tokenize_chat_history(batch_prompts,
+                          tokenizer):
+    """
+    Initial tokenization for first prompt
+    
+    :param batch: the prompts that we want to generate initial completions for
+    """
+    
+    batch_chats = []
+    
+    # print(f"Batch prompts: {batch_prompts}")
+    
+    for batch_prompt in batch_prompts:
+        chat_for_one_prompt = get_all_turns_and_format(batch_prompt)
+        batch_chats.append(chat_for_one_prompt)
+    
+    batch_chats = tokenizer.apply_chat_template(
+            batch_chats,
+            return_tensors="pt",
+            padding=True,
+            return_dict=True
+    )  
+
+    return batch_chats
+
+def tokenize_revision_request(batch_prompts, 
+                              principle, 
+                              batch_responses,
+                              tokenizer):
+    """
+    Tokenize the initial revision request
+    :param batch_prompts: the prompts that we are generating revisions for with critiques
+    :param principle: the principles with which we are generating critiques
+    :param batch_responses: responses that we want to critique
+    
+    :return the tokenized revision request
+    """
+
+    revision_requests = []
+    for i, batch_prompt in enumerate(batch_prompts):
+        
+        batch_response = batch_responses[i]
+        revision_request = f"""The following is an original response to a user prompt, followed by a revision instruction.\nPlease revise the original response according to the revision instruction and output ONLY your revised response (which must answer the question in the prompt history) as plain text. DO NOT mention the revision instruction in your response. \nUser prompt history: {batch_prompt}\nOriginal response: {batch_response}\nRevision principle: {principle}\nRevised response:"""
+        
+        chat = [
+            {"role": "user", "content": revision_request}
+        ]
+        
+        revision_requests.append(chat)
+        
+    revision_requests = tokenizer.apply_chat_template(
+            revision_requests,
+            return_tensors="pt",
+            padding=True,
+            return_dict=True
+    )  
+      
+
+    return revision_requests
+
+# NOTE: this function can now handle batches!
+def revise_responses_on_constitution(batch_prompts,
+                                     model,
+                                     tokenizer,
+                                     accelerator,
+                                     constitution,
+                                     number_of_revisions=4) -> str:
+    """
+    Revises a given harmfulness_prompt response according to the constitutional principles.
+    Args:
+        constitution (dict): The constitution containing principles for revision.
+        batch: The prompt (multi-turn) to be revised.
+        number_of_revisions (int): Number of revision iterations to perform.
+    Returns:
+        str: The revised response after applying the constitution principles.
+    """
+    
+    batch_prompts = batch_prompts['prompt']
+
+    # Get initial completions for the batch of prompts
+    revision_instructions = random.choice(constitution['principles'])
+    random_principle = revision_instructions['description']
+        
+    tokenized_batch_prompts = tokenize_chat_history(batch_prompts, tokenizer)
+    
+    input_ids = tokenized_batch_prompts['input_ids']
+    attention_mask = tokenized_batch_prompts['attention_mask']
+    
+    # INITIAL COMPLETIONS
+    print("Generating initial completions for the batch of prompts:\n")
+    
+    initial_completions = get_completions(
+        input_ids, attention_mask, model, accelerator, tokenizer
+    )
+       
+    responses_to_revise = initial_completions
+    
+    print(f"Initial completions: {responses_to_revise}" )
+    
+    """
+    User: lorem ipsum
+    Assistant: lore ipsum
+    User: lorem ipsum
+        
+    Call initial completion, get:
+    Assistant: ... initial completion
+            
+    """
+    
+    print("Generating revisions for the batch of prompts:\n")
+        
+    # NOTE: this is doing revisions
+    for _ in range(number_of_revisions):      
+                                  
+        # Add the new prompt to the conversation history
+        # harmfulness_prompt_history.append({
+        #     'role': 'user',
+        #     'content': revision_prompt
+        # })
+            
+        # revision_prompt = [
+        #     {'role': 'user', 'content': revision_prompt}
+        # ]
+        
+        tokenized_revision_prompt = tokenize_revision_request(batch_prompts, 
+                                                            random_principle, 
+                                                            responses_to_revise,
+                                                            tokenizer)
+
+        revision_prompt_input_ids = tokenized_revision_prompt['input_ids']
+        revision_prompt_attention_mask = tokenized_revision_prompt['attention_mask']
+
+        revised_responses = get_completions(
+                revision_prompt_input_ids,
+                revision_prompt_attention_mask,
+                model,
+                accelerator,
+                tokenizer
+            )
+           
+        responses_to_revise = revised_responses
+            
+    return responses_to_revise
+
+def run_generation(prompt_iterator, tokenizer, model, accelerator, constitution):
+    
+    responses = []
+    prompt_idx = 0
+
+    # batch number (e.g. 4) batch items per batch
+    for batch in tqdm(prompt_iterator, desc="Processing batches"):
+        prompt_idx += 1
+        print(f' Processing batch: {prompt_idx}')
+        print(f'prompt_idx: {prompt_idx}')
+        
+        start_time = time.time()
+        
+        final_completion = revise_responses_on_constitution(batch,
+            model, tokenizer, accelerator, constitution, number_of_revisions=4)
+        
+        end_time = time.time()
+        elapsed_time = end_time - start_time
+        print(f"Time taken for batch {prompt_idx}: {elapsed_time:.2f} seconds")
+        
+        # final_completion = accelerator.gather_for_metrics(final_completion)
+        
+        # Append each completion with its corresponding prompt
+        for i, completion in enumerate(final_completion):
+            responses.append({
+                "prompt": batch["prompt"][i],
+                "completion": completion
+            })
+        
+    # print(f"Responses before gathering: {responses}")
+    responses = gather_iterator_batches(responses,
+                                        accelerator,
+                                        prompt_iterator)    
+    
+    return responses
+
+def prompt_from_hh_anthropic(instruction):
+    # Extract the first human prompt before the assistant response to make all data 1-turn (e.g. "Hi, I want to learn to play horseshoes. Can you teach me?")
+    relevant_instruction = instruction.partition(
+        '\n\nAssistant:')[0].partition('Human:')[2].strip()
+    return relevant_instruction
+
+def dump_files(responses, base_output_dir):
+    with open(os.path.join(base_output_dir, f'hh_anthropic_1turn_df_completions_many.json'), 'w+') as f:
+        json.dump(responses, f, indent=2)
+    print('Saved to file')
+
+def create_revisions(model_name: str = 'Qwen/Qwen2-7B',
+                     constitution: dict = None,
+                     accelerator: Accelerator = None,
+                     num_completions: int = 100):
+    
+    #need to expand this out into different sections?
+    
+    args = {
+        # This magic number is from the Anthropic CAI paper
+        # "num_completions": 182831,
+        "num_completions": num_completions,
+        "ai_model": f"{model_name}",
+        "base_output_dir": f"{os.getenv('PROJECT_CACHE', '~/.cache')}/hh_data",
+        "cache_dir": os.getenv("PROJECT_CACHE", "~/.cache"),
+        "data_fraction": 1.0,
+        "ff": 1,
+        # "constitution": constitution_path,
+    }
+
+    # Print the current working directory
+    with accelerator.main_process_first():
+        print("Current working directory:", os.getcwd())
+        
+        # Limit number of completions if specified
+        if args["num_completions"] <= 0:
+            raise ValueError(
+                'num_completions must be positive integer that is greater than 0')
+
+        if CASE_REGIME == "case":
+            print("Using CASE-based revision regime.")   
+            
+            #TO-DO: Parallelize this as well?
+            embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
+            
+            for principle in constitution['principles']:
+                print(f"Principle: {principle['principle']}")
+                embeddings = embedding_model.encode(principle['cases'])
+                principle['case_embeddings'] = embeddings
+                    
+        elif CASE_REGIME == "constitution":
+            print("Using CONSTITUTION-based revision regime.") 
+                
+    # Use Qwen for tokenizing prompts from Anthropic helpfulness dataset Qwen/Qwen2-7B
+    # tokenizer = AutoTokenizer.from_pretrained(
+    #     'Qwen/Qwen2-1.5B')
+    
+        tokenizer = AutoTokenizer.from_pretrained(model_name,
+                                                  padding_side='left')
+        tokenizer.pad_token_id = tokenizer.eos_token_id
+        model = AutoModelForCausalLM.from_pretrained(
+                    model_name,
+                    dtype=compute_dtype,
+                    quantization_config=bnb_config,
+                )
+        
+        prompt_iterator = get_pytorch_iterator(['hh'],
+                                             tokenizer=tokenizer,
+                                             split='train',
+                                             batch_size=4,
+                                             sft_mode=True,
+                                             seed=0,
+                                             n_epochs=1,
+                                             n_examples=args["num_completions"],
+                                             fast_forward = args["ff"],
+                                             cache_dir=args["cache_dir"],
+                                             shuffle=False, # doesn't matter, as we use complete prompt for GPT-4/Claude
+                                             max_prompt_length=256,
+                                             max_length=512,
+                                             num_turns=1,
+                                             data_fraction=args["data_fraction"],
+                                             prefs_path=None,
+                                             sampled_data_dir=None,
+                                             text_preprocessing_func = prompt_from_hh_anthropic,
+                                             num_examples = args["num_completions"],
+        )
+        
+    # We are preparing the model and the iterator here for
+    model, prompt_iterator = accelerator.prepare(model, prompt_iterator)
+    model = accelerator.unwrap_model(model)
+    
+    accelerator.wait_for_everyone()
+
+    # NOTE: these are the final responses
+    final_responses = run_generation(prompt_iterator, tokenizer, model, accelerator, constitution)     
+    
+    # dump_files(final_responses, args['base_output_dir'])
+    
+    accelerator.wait_for_everyone()
+
+    return final_responses
+    # if accelerator.is_local_main_process:
+    #     dump_files(final_responses, args['base_output_dir'])
+    
+if __name__ == "__main__":
+    
+    model_name = sys.argv[1]
+    constitution_path = sys.argv[2]
+    num_completions = int(sys.argv[3])
+    sft_dataset_path = sys.argv[4]
+    
+    accelerator = Accelerator()
+
+    if accelerator.is_local_main_process:
+        start_time = time.time()
+        data_parallel_degree = torch.cuda.device_count()
+    
+    with accelerator.main_process_first():
+        constitution_folder = os.path.join(os.path.dirname(__file__), 'constitutions')
+        os.makedirs(constitution_folder, exist_ok=True)
+        constitution_file_path = os.path.join(constitution_folder, os.path.basename(constitution_path))
+
+        with open(constitution_file_path, 'r') as f:
+            constitution = json.load(f)
+        
+
+    dataset = create_revisions(model_name, 
+                     constitution,
+                     accelerator,
+                     num_completions)
+    
+    if accelerator.is_local_main_process:
+        print(dataset)
+        
+        # Add to the datasets folder
+        dataset_folder = os.path.join(os.path.dirname(__file__), 'local_datasets')
+        os.makedirs(dataset_folder, exist_ok=True)
+        
+        file_path = os.path.join(dataset_folder, sft_dataset_path)
+
+        with open(file_path, 'w', encoding='utf-8') as f:
+            json.dump(dataset, f, indent=4)
+            
+        print(f"Time difference: {(time.time() - start_time) / 60} minutes")
+
+        if dist.is_initialized():
+            dist.destroy_process_group()
