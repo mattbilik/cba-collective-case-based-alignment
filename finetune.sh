@@ -19,3 +19,8 @@ accelerate launch --multi_gpu --num_processes $NUM_GPUS accelerate_rlaif/trainin
 echo "------------------------------------"
 echo "training the policy model with the reward model"
 accelerate launch --multi_gpu --num_processes $NUM_GPUS accelerate_rlaif/training_grpo_with_reward_model.py dataset.json models/final_reward_model Qwen/Qwen2-0.5B models/grpo_checkpoints models/grpo_model_constitution_FINAL
+
+echo "------------------------------------"
+echo "evaluating the SFT model and the GRPO model on MMLU"
+python accelerate_rlaif/testing_suite/mmlu.py models/sft_model Qwen/Qwen2-0.5B
+python accelerate_rlaif/testing_suite/mmlu.py models/grpo_model_constitution_FINAL Qwen/Qwen2-0.5B
