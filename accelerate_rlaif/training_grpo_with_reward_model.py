@@ -4,6 +4,7 @@ from peft import LoraConfig, TaskType
 from transformers import AutoModelForSequenceClassification, AutoTokenizer, PretrainedConfig, BitsAndBytesConfig
 from trl import GRPOTrainer, GRPOConfig
 from datasets import Dataset
+# import matplotlib.pyplot as plt
 
 import os
 
@@ -106,6 +107,9 @@ def train_with_grpo(dataset: Dataset,
         # NOTE: Ideally, this would be the case
         # gradient_checkpointing=True,
         ddp_find_unused_parameters=False,
+        
+        # NOTE: reporting to tensorboard 
+        report_to="tensorboard"
     )
 
     grpo_trainer = GRPOTrainer(
@@ -130,10 +134,31 @@ def train_with_grpo(dataset: Dataset,
         
         # Save the GRPO log
         log_path = os.path.join(output_directory, "grpo_log.json")
-        if accelerator.is_local_main_process:
-            with open(log_path, "w") as log_file:
-                json.dump(grpo_log, log_file, indent=4)
-    
+        with open(log_path, "w") as log_file:
+            json.dump(grpo_log, log_file, indent=4)
+                
+        # Extract training loss, rewards, and steps
+        # steps = list(range(1, len(grpo_log) + 1))
+        # losses = [entry.get("train_loss") for entry in grpo_log if "train_loss" in entry]
+        # rewards = [entry.get("reward") for entry in grpo_log if "reward" in entry]
+        
+        # if steps and losses:
+        #     plt.figure(figsize=(10, 6))
+        #     plt.plot(steps, losses, label="Training Loss")
+        #     if rewards:
+        #         plt.plot(steps, rewards, label="Reward", linestyle="--")
+        #     plt.xlabel("Steps")
+        #     plt.ylabel("Value")
+        #     plt.title("GRPO Training Loss and Reward Over Steps")
+        #     plt.legend()
+        #     plt.grid()
+            
+        #     # Save the plot
+        #     plot_path = os.path.join(output_directory, "grpo_training_loss_and_reward.png")
+        #     plt.savefig(plot_path)
+        #     plt.close()
+        # else:
+        #     print("No valid 'train_loss' or 'reward' entries found in GRPO log. Skipping plot generation.")
     
     final_model = accelerator.unwrap_model(grpo_trainer.model)
     final_model = final_model.merge_and_unload()

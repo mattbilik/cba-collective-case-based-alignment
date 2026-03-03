@@ -8,7 +8,7 @@ echo "fine-tuning the helpful model with SFT"
 accelerate launch --multi_gpu --num_processes $NUM_GPUS accelerate_rlaif/generate_sft_dataset.py Qwen/Qwen2-0.5B constitution_from_doc.json 20 sft_dataset.json
 echo "------------------------------------"
 echo "training the SFT model on the generated dataset"
-accelerate launch --multi_gpu --num_processes $NUM_GPUS accelerate_rlaif/training_sft_model.py Qwen/Qwen2-0.5B sft_dataset.json
+accelerate launch --multi_gpu --num_processes $NUM_GPUS accelerate_rlaif/training_sft_model.py Qwen/Qwen2-0.5B sft_dataset.json models/sft_model
 
 echo "------------------------------------"
 echo "doing RLAIF with GRPO"

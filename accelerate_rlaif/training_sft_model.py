@@ -1,6 +1,8 @@
+# Create a figure for training loss
+# import matplotlib.pyplot as plt
+
 from transformers import (
     AutoModelForCausalLM,
-    AutoTokenizer,
     BitsAndBytesConfig,
     TrainingArguments,
 )
@@ -8,9 +10,9 @@ from transformers import (
 # https://github.com/axolotl-ai-cloud/axolotl/issues/1436
 # BitsAndBytes doesn't support Mac M1/M2 or intel chips
 
-from trl import SFTTrainer
+from trl import SFTTrainer, SFTConfig
 from torch import torch
-from peft import LoraConfig
+from peft import LoraConfig, prepare_model_for_kbit_training
 from datasets import Dataset
 import json
 import os
@@ -86,7 +88,7 @@ bf16 = False
 gradient_accumulation_steps = 8
 
 # Enable gradient checkpointing
-gradient_checkpointing = True
+# gradient_checkpointing = True
 
 # Maximum gradient normal (gradient clipping)
 max_grad_norm = 0.3
@@ -111,7 +113,7 @@ warmup_ratio = 0.03
 
 # Group sequences into batches with same length
 # Saves memory and speeds up training considerably
-group_by_length = True
+# group_by_length = True
 
 # Save checkpoint every X updates steps
 save_steps = 25
@@ -158,58 +160,96 @@ logging_steps = 25
 
 def finetune_sft(accelerator: Accelerator,
                  dataset: Dataset,
-                 model_name: str = MODEL_NAME):
+                 model_name: str = MODEL_NAME,
+                 final_model_path: str = None):
         
     output_dir=f"{model_name}-constitution-checkpoints"
-    training_arguments = TrainingArguments(
-        output_dir=output_dir,
-        num_train_epochs=num_train_epochs,
-        # per_device_train_batch_size=per_device_train_batch_size,
-        gradient_accumulation_steps=gradient_accumulation_steps,
-        optim=optim,
-        save_steps=save_steps,
-        logging_steps=logging_steps,
-        learning_rate=learning_rate,
-        weight_decay=weight_decay,
-        fp16=fp16,
-        bf16=bf16,
-        max_grad_norm=max_grad_norm,
-        # max_steps=max_steps,
-        warmup_ratio=warmup_ratio,
-        group_by_length=group_by_length,
-        lr_scheduler_type=lr_scheduler_type,
-        report_to="tensorboard"
-    )
-
-    # TRL calls get_peft_model() automatically with peft_config
-    sft_trainer = SFTTrainer(
-        model=model_name,
-        train_dataset=dataset,
-        peft_config=lora_config,
-        args=training_arguments,
+    
+    model = AutoModelForCausalLM.from_pretrained(
+        model_name,
+        quantization_config=bnb_config,
+        dtype=compute_dtype,
     )
     
-    sft_trainer.model.quantization_config = bnb_config
-
+    model = prepare_model_for_kbit_training(model)
+    
+    # training_arguments = TrainingArguments(
+    #     output_dir=output_dir,
+    #     num_train_epochs=num_train_epochs,
+    #     # per_device_train_batch_size=per_device_train_batch_size,
+    #     gradient_accumulation_steps=gradient_accumulation_steps,
+    #     optim=optim,
+    #     save_steps=save_steps,
+    #     logging_steps=logging_steps,
+    #     learning_rate=learning_rate,
+    #     weight_decay=weight_decay,
+    #     fp16=fp16,
+    #     bf16=bf16,
+    #     max_grad_norm=max_grad_norm,
+    #     # max_steps=max_steps,
+    #     warmup_ratio=warmup_ratio,
+    #     gradient_checkpointing=True,
+    #     group_by_length=False, # 2. Crucial for DDP stability
+    #     ddp_find_unused_parameters=False, # 3. Standard for LoRA        
+    #     lr_scheduler_type=lr_scheduler_type,
+    #     report_to="tensorboard"
+    # )
+    sft_config = SFTConfig(
+        output_dir=output_dir,
+        max_length=512,
+        per_device_train_batch_size=1,
+        gradient_accumulation_steps=8,
+        gradient_checkpointing=True,
+        optim="paged_adamw_8bit",
+        fp16=True, # or bf16=True
+        report_to="tensorboard",
+        ddp_find_unused_parameters=False,
+        num_train_epochs=num_train_epochs
+    )
+    
+    # TRL calls get_peft_model() automatically with peft_config
+    sft_trainer = SFTTrainer(
+        model=model,
+        train_dataset=dataset,
+        peft_config=lora_config,
+        args=sft_config,
+    )
+    
     # Train model
     sft_trainer.train()
     accelerator.wait_for_everyone()
 
     if accelerator.is_local_main_process: 
     
-        grpo_log = sft_trainer.state.log_history
+        sft_log = sft_trainer.state.log_history
         
         # Save the SFT log
         log_path = "sft_log.json"
-        if accelerator.is_local_main_process:
-            with open(log_path, "w") as log_file:
-                json.dump(grpo_log, log_file, indent=4)
-
+        with open(log_path, "w") as log_file:
+            json.dump(sft_log, log_file, indent=4)
+                
+        # # Extract training loss and steps
+        # steps = [entry["step"] for entry in sft_log if "train_loss" in entry]
+        # losses = [entry["train_loss"] for entry in sft_log if "train_loss" in entry]
+        
+        # plt.figure(figsize=(10, 6))
+        # plt.plot(steps, losses, label="Training Loss", marker="o")
+        # plt.xlabel("Steps")
+        # plt.ylabel("Loss")
+        # plt.title("Training Loss Over Steps")
+        # plt.legend()
+        # plt.grid()
+        
+        # # Save the figure
+        # figure_path = "training_loss.png"
+        # plt.savefig(figure_path)
+        # plt.close()
+        
     final_model = accelerator.unwrap_model(sft_trainer.model)
     final_model = final_model.merge_and_unload()
 
     # Save trained model
-    final_model.save_pretrained(f"{model_name}-constitution")
+    final_model.save_pretrained(final_model_path)
         
 if __name__ == "__main__":
     
@@ -223,9 +263,11 @@ if __name__ == "__main__":
 
     model_path_or_name = sys.argv[1]
     dataset_path = sys.argv[2] 
+    final_model_path = sys.argv[3]
 
     dataset = load_dataset_from_path(dataset_path)
 
     finetune_sft(accelerator,
                  dataset,
-                 model_name=model_path_or_name)
+                 model_name=model_path_or_name,
+                 final_model_path=final_model_path)
