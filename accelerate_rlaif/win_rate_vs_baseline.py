@@ -2,13 +2,13 @@ import os
 import json
 import random
 import sys
-from hh_preferences.preference_datasets import get_batch_iterator, 
+from hh_preferences.preference_datasets import get_batch_iterator
 from hh_preferences.utils import prompt_from_hh_anthropic
 from accelerate import Accelerator
 from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
 from sentence_transformers import SentenceTransformer
 import torch
-from torch.utils.data import DataLoader
+from torch.utils.data import Dataset, DataLoader
 
 from helpers.model_funcs import get_completions
 from helpers.accelerate_funcs import gather_iterator_batches
@@ -39,14 +39,17 @@ bnb_config = BitsAndBytesConfig(
 )
 
 #this duplicates a lot of functionality as GRPO RewardDataset class, so we should sort that out
-class JudgmentDataset(pytorch.Dataset):
+class JudgmentDataset(Dataset):
     def __init__(self, prompts, responseAs, responseBs, tokenizer, constitution):
         self.responseAs = responseAs
         self.responseBs = responseBs
-        self.prompts[i]
+        self.prompts = prompts
         if (len(responseAs) != len(responseBs)) or (len(responseAs) != len(prompts)):
             raise ValueError("Should have equal number of prompts, responseA's, and responseB's")
-        self.principles = [random.choice(constitution["principles"] for responseA in responseAs)]
+        self.principles = [
+            random.choice(constitution["principles"])
+            for _ in responseAs
+        ]
         self.tokenizer = tokenizer
 
     def __len__(self):
@@ -80,6 +83,7 @@ class JudgmentDataset(pytorch.Dataset):
 
             prompt_for_length = [
                 {"role": "user", "content": prompt},
+#                {"role": "assistant", "content": ""} we might need this to make the length calculation correct?
             ]
 
             tokenized_with_A = self.tokenizer.apply_chat_template(
@@ -103,23 +107,23 @@ class JudgmentDataset(pytorch.Dataset):
             
             p_len = prompt_ids.size(1)  
              
-            prompt_lengths.append(p_len)
-            return {"A": tokenize_with_A, "B": tokenized_with_B, "p_len": p_len}
+            return {"A": tokenized_with_A, "B": tokenized_with_B, "p_len": p_len}
 
 
 def generate_test_responses(model: AutoModelForCausalLM,
-                     accelerator: Accelerator = None,
+                     accelerator: Accelerator,
                      dataset):
     
     # We are preparing the model and the iterator here for
-    model, prompt_iterator = accelerator.prepare(model, prompt_iterator)    
+    model = accelerator.prepare(model)
+    dataset =  accelerator.prepare(dataset)    
     accelerator.wait_for_everyone()
     responses = []
     prompt_idx = 0
 
-    for batch in tqdm(prompt_iterator, desc="Processing batches"):
+    for batch in tqdm(dataset, desc="Processing batches"):
         prompt_idx += 1        
-        final_completion = get_completions (nodel, batch)
+        final_completion = get_completions(model, batch)
         final_completion = accelerator.gather_for_metrics(final_completion)
         responses.extend(final_completion)
     
@@ -175,8 +179,8 @@ def compute_log_probs(judge_model, accelerator, sequences, prompt_lengths):
             "attention_mask": sequences['attention_mask']
         }
             
-        inputs["input_ids"] = inputs["input_ids"].to(self.accelerator.device)
-        inputs["attention_mask"] = inputs["attention_mask"].to(self.accelerator.device)
+        inputs["input_ids"] = inputs["input_ids"].to(accelerator.device)
+        inputs["attention_mask"] = inputs["attention_mask"].to(accelerator.device)
 
         prompt_lengths = torch.tensor(prompt_lengths, device=inputs["attention_mask"].device)
         
@@ -191,7 +195,7 @@ def compute_log_probs(judge_model, accelerator, sequences, prompt_lengths):
         
         with torch.inference_mode():
                 # not passing labels for mem savings
-                outputs = self.model(
+                outputs = judge_model(
                     input_ids=inputs["input_ids"],
                     attention_mask=inputs["attention_mask"]
                 )
@@ -226,20 +230,21 @@ def score_batch(judge_model, accelerator, batch):
     scoreB = compute_log_probs(judge_model, accelerator, batch["B"], batch["p_len"])
     return torch.exp(scoreA) / (torch.exp(scoreA) + torch.exp(scoreB))
 
-def judge_outputs(judge_model, tokenizer, constitution, accelerator, prompts, trained_responses, baseline_responses, batch_size)
+def judge_outputs(judge_model, tokenizer, constitution, accelerator, prompts, trained_responses, baseline_responses, batch_size):
     judgment_cases = JudgmentDataset(prompts, trained_responses, baseline_responses, tokenizer, constitution)
     judgment_case_iterator = DataLoader(judgment_cases, batch_size = batch_size)
-    model, prompt_iterator = accelerator.prepare(judge_model, judgement_case_iterator)    
+    judge_model = accelerator.prepare(judge_model)
+    judgment_case_iterator = accelerator.prepare(judgment_case_iterator)
     final_scores = []
     for batch in tqdm(prompt_iterator, desc="Processing batches"):
         scores = score_batch(judge_model, accelerator, batch)
         scores = accelerator.gather_for_metrics(scores)
-        responses.extend(scores)
+        final_scores.extend(scores)
     
-    responses = gather_iterator_batches(responses,
+    final_scores = gather_iterator_batches(final_scores,
                                         accelerator,
                                         prompt_iterator)
-    return responses
+    return final_scores
 
 if __name__ == "__main__":
     
@@ -264,13 +269,15 @@ if __name__ == "__main__":
         prompts = [x for x in get_dataset(dataset_name, 1, None, 100)]
         
     trained_responses = generate_test_responses(trained_model, accelerator, batched_test_dataset)
-
-    baseline_responses = generate_test_responses(baseline_model, accelerator, test_batched_test_datasetdataset)
+ 
+    #get a fresh dataset that isn't wrapped by accelerate 
+    batched_test_dataset = get_dataset(dataset_name, 4, tokenizer, 100)
+    baseline_responses = generate_test_responses(baseline_model, accelerator, batched_test_dataset)
 
     judgments = judge_outputs(baseline_model, tokenizer, constitution, accelerator, prompts, trained_responses, baseline_responses, 4)
 
     #shooould be win rate?
-    print((judgments > 0.5).sum())
+    print((judgments > 0.5).sum() / judgments.shape[0])
     
     #avg margin of victory
     print((judgments).mean())
