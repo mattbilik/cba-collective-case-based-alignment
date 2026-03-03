@@ -1,5 +1,4 @@
 import torch
-from torch.nn.utils.rnn import pad_sequence
 import time
 
 def tokens_per_second_metric(preds, refs, start_time):
@@ -81,3 +80,71 @@ def get_completions(input_ids,
     responses = tokenizer.batch_decode(responses, skip_special_tokens=True)
             
     return responses
+
+def compute_log_prob_response(model, 
+                              tokenized_prompts,
+                              tokenized_prompt_lengths,
+                              accelerator):
+    
+        """
+        Docstring for compute_log_prob_response
+        
+        :param model: Description
+        :param tokenized_prompts: Description
+        :param tokenized_prompt_lengths: Description
+        :param accelerator: Description
+        """
+    
+        inputs = {
+            "input_ids": tokenized_prompts['input_ids'],
+            "attention_mask": tokenized_prompts['attention_mask']
+        }
+            
+        inputs["input_ids"] = inputs["input_ids"].to(accelerator.device)
+        inputs["attention_mask"] = inputs["attention_mask"].to(accelerator.device)
+
+        prompt_lengths = torch.tensor(tokenized_prompt_lengths, device=inputs["attention_mask"].device)
+        
+        # We are adding the attention mask (which gives us the prompt + response length)
+        # We only want to get the logits associated with the response, though
+        
+        length_of_prompt_and_output = inputs["attention_mask"].sum(dim=1)
+        
+        # Size of tensors
+        total_lengths_of_tensors = inputs["attention_mask"].size(1)
+    
+        padding_length = total_lengths_of_tensors - length_of_prompt_and_output
+        
+        starting_positions = (padding_length + prompt_lengths) - 1
+        
+        with torch.inference_mode():
+                # not passing labels for mem savings
+                outputs = model(
+                    input_ids=inputs["input_ids"],
+                    attention_mask=inputs["attention_mask"]
+                )
+                
+                # Just getting logits like this
+                logits = outputs.logits         
+        
+        # Get all batches, and every logit in in each batch item except for the last (the last item, which has yet to be predicted / is empty)
+        shift_logits = logits[:, :-1, :]
+        
+        # Get all batches, and then everything in each batch item from 1 forward
+        # Matching input ids with their associated logits
+        shift_labels = inputs["input_ids"][:, 1:]
+        
+        log_probs = torch.log_softmax(shift_logits, dim=-1)
+        selected_log_probs = torch.gather(
+            log_probs,
+            dim=-1,
+            index=shift_labels.unsqueeze(-1)
+        ).squeeze(-1)
+        
+        positions = torch.arange(selected_log_probs.size(1), device=logits.device).unsqueeze(0)
+        response_mask = positions >= starting_positions.unsqueeze(1)
+        final_log_probs = selected_log_probs * response_mask
+        
+        final_log_probs = final_log_probs.sum(dim=1)
+
+        return final_log_probs
