@@ -81,13 +81,13 @@ def get_completions(input_ids,
             
     return responses
 
-def compute_log_prob_response(model, 
-                              tokenized_prompts,
-                              tokenized_prompt_lengths,
-                              accelerator):
+def compute_log_probs(model, 
+                      tokenized_prompts,
+                      tokenized_prompt_lengths,
+                      accelerator):
     
         """
-        Docstring for compute_log_prob_response
+        Docstring for compute_log_probs
         
         :param model: Description
         :param tokenized_prompts: Description
