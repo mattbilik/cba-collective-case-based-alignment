@@ -239,7 +239,7 @@ class RewardDataset:
 
             prompt_ids = self.tokenizer.apply_chat_template(
                 prompt_for_length, 
-                add_generation_prompt=True, 
+                add_generation_prompt=False, 
                 return_tensors="pt"
             )     
             
