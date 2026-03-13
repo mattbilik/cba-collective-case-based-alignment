@@ -12,15 +12,15 @@ accelerate launch --multi_gpu --num_processes $NUM_GPUS accelerate_rlaif/trainin
 
 echo "------------------------------------"
 echo "doing RLAIF with GRPO"
-accelerate launch --multi_gpu --num_processes $NUM_GPUS accelerate_rlaif/generate_grpo_dataset.py Qwen/Qwen2-0.5B constitution_from_doc.json 20 n
+accelerate launch --multi_gpu --num_processes $NUM_GPUS accelerate_rlaif/generate_grpo_dataset.py Qwen/Qwen-7B constitution_from_doc.json 20 n
 echo "------------------------------------"
 echo "training the reward model"
-accelerate launch --multi_gpu --num_processes $NUM_GPUS accelerate_rlaif/training_reward_model.py dataset.json models/final_reward_model Qwen/Qwen2-0.5B
+accelerate launch --multi_gpu --num_processes $NUM_GPUS accelerate_rlaif/training_reward_model.py dataset.json models/final_reward_model Qwen/Qwen-7B
 echo "------------------------------------"
 echo "training the policy model with the reward model"
-accelerate launch --multi_gpu --num_processes $NUM_GPUS accelerate_rlaif/training_grpo_with_reward_model.py dataset.json models/final_reward_model Qwen/Qwen2-0.5B models/grpo_checkpoints models/grpo_model_constitution_FINAL
+accelerate launch --multi_gpu --num_processes $NUM_GPUS accelerate_rlaif/training_grpo_with_reward_model.py dataset.json models/final_reward_model Qwen/Qwen-7B models/grpo_checkpoints models/grpo_model_constitution_FINAL
 
 echo "------------------------------------"
 echo "evaluating the SFT model and the GRPO model on MMLU"
 accelerate launch --multi_gpu --num_processes $NUM_GPUS accelerate_rlaif/testing_suite/mmlu.py models/sft_model Qwen/Qwen2-0.5B
-accelerate launch --multi_gpu --num_processes $NUM_GPUS accelerate_rlaif/testing_suite/mmlu.py models/grpo_model_constitution_FINAL Qwen/Qwen2-0.5B
+accelerate launch --multi_gpu --num_processes $NUM_GPUS accelerate_rlaif/testing_suite/mmlu.py models/grpo_model_constitution_FINAL Qwen/Qwen-7B

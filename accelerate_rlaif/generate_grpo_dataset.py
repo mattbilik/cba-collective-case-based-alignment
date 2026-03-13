@@ -21,7 +21,7 @@ from accelerate.parallelism_config import ParallelismConfig
 
 from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
 
-from helpers.model_funcs import get_completions
+from helpers.model_funcs import get_completions, compute_log_probs
 from peft import LoraConfig, get_peft_model
 
 BASE_MODEL = "Qwen/Qwen2-0.5B"
@@ -86,7 +86,7 @@ class RewardDataset:
             prompt_iterator = get_pytorch_iterator(['hh'], 
                                                 tokenizer=self.tokenizer, 
                                                 split='train', 
-                                                batch_size=4, 
+                                                batch_size=32, 
                                                 sft_mode=True,
                                                 seed=0, 
                                                 n_epochs=1, 
@@ -118,6 +118,25 @@ class RewardDataset:
 
         self.__generate_completions_and_scores()
 
+    def __format_reward_dataset(self, example):
+        chosen_text = example["prompt"] + example["chosen"]
+        rejected_text = example["prompt"] + example["rejected"]
+        
+        margin = float(example["margin"]) 
+        
+        # Swap chosen and rejected if margin is negative, and take absolute value of margin
+        if margin < 0:
+            example["chosen"] = rejected_text
+            example["rejected"] = chosen_text
+            example["margin"] = abs(margin)
+        
+        return example
+
+    def __normalize_margin(self, example, max_margin):
+        # This ensures all margins fall between 0.0 and 1.0
+        example["margin"] = example["margin"] / max_margin
+        return example
+
     def __generate_completions_and_scores(self):
         
         dataset = []
@@ -137,9 +156,16 @@ class RewardDataset:
             processed_data = self.__process_prompt_batches(batch)
             dataset.extend(processed_data)
             
-        self.dataset = gather_iterator_batches(dataset,
+        raw_dataset = gather_iterator_batches(dataset,
                                                self.accelerator,
                                                self.prompt_iterator)
+        
+        margins = [item["margin"] for item in raw_dataset]
+        
+        max_margin = max(margins) 
+
+        raw_dataset = [self.__normalize_margin(example, max_margin) for example in raw_dataset]
+        self.dataset = [self.__format_reward_dataset(example) for example in raw_dataset]
             
     def __tokenize_batches(self, prompt_batches):
         
@@ -350,7 +376,11 @@ class RewardDataset:
                                                                 responses_1,
                                                                 responses_2,
                                                                 selected_response)
-            
+        
+        final_log_probs = compute_log_probs(self.model,
+                                            tokenized_preference_pairs,
+                                            prompt_lengths,
+                                            self.accelerator)
         # prompt_len = len(inputs)
 
         # E.g.
@@ -371,57 +401,57 @@ class RewardDataset:
         
         # Qwen, make sure to return BatchEncoding-like object
         
-        inputs = {
-            "input_ids": tokenized_preference_pairs['input_ids'],
-            "attention_mask": tokenized_preference_pairs['attention_mask']
-        }
+        # inputs = {
+        #     "input_ids": tokenized_preference_pairs['input_ids'],
+        #     "attention_mask": tokenized_preference_pairs['attention_mask']
+        # }
             
-        inputs["input_ids"] = inputs["input_ids"].to(self.accelerator.device)
-        inputs["attention_mask"] = inputs["attention_mask"].to(self.accelerator.device)
+        # inputs["input_ids"] = inputs["input_ids"].to(self.accelerator.device)
+        # inputs["attention_mask"] = inputs["attention_mask"].to(self.accelerator.device)
 
-        prompt_lengths = torch.tensor(prompt_lengths, device=inputs["attention_mask"].device)
+        # prompt_lengths = torch.tensor(prompt_lengths, device=inputs["attention_mask"].device)
         
-        # We are adding the attention mask (which gives us the prompt + response length)
-        # We only want to get the logits associated with the response, though
+        # # We are adding the attention mask (which gives us the prompt + response length)
+        # # We only want to get the logits associated with the response, though
         
-        length_of_prompt_and_output = inputs["attention_mask"].sum(dim=1)
+        # length_of_prompt_and_output = inputs["attention_mask"].sum(dim=1)
         
-        # Size of tensors
-        total_lengths_of_tensors = inputs["attention_mask"].size(1)
+        # # Size of tensors
+        # total_lengths_of_tensors = inputs["attention_mask"].size(1)
     
-        padding_length = total_lengths_of_tensors - length_of_prompt_and_output
+        # padding_length = total_lengths_of_tensors - length_of_prompt_and_output
         
-        starting_positions = (padding_length + prompt_lengths) - 1
+        # starting_positions = (padding_length + prompt_lengths) - 1
         
-        with torch.inference_mode():
-                # not passing labels for mem savings
-                outputs = self.model(
-                    input_ids=inputs["input_ids"],
-                    attention_mask=inputs["attention_mask"]
-                )
+        # with torch.inference_mode():
+        #         # not passing labels for mem savings
+        #         outputs = self.model(
+        #             input_ids=inputs["input_ids"],
+        #             attention_mask=inputs["attention_mask"]
+        #         )
                 
-                # Just getting logits like this
-                logits = outputs.logits         
+        #         # Just getting logits like this
+        #         logits = outputs.logits         
         
-        # Get all batches, and every logit in in each batch item except for the last (the last item, which has yet to be predicted / is empty)
-        shift_logits = logits[:, :-1, :]
+        # # Get all batches, and every logit in in each batch item except for the last (the last item, which has yet to be predicted / is empty)
+        # shift_logits = logits[:, :-1, :]
         
-        # Get all batches, and then everything in each batch item from 1 forward
-        # Matching input ids with their associated logits
-        shift_labels = inputs["input_ids"][:, 1:]
+        # # Get all batches, and then everything in each batch item from 1 forward
+        # # Matching input ids with their associated logits
+        # shift_labels = inputs["input_ids"][:, 1:]
         
-        log_probs = torch.log_softmax(shift_logits, dim=-1)
-        selected_log_probs = torch.gather(
-            log_probs,
-            dim=-1,
-            index=shift_labels.unsqueeze(-1)
-        ).squeeze(-1)
+        # log_probs = torch.log_softmax(shift_logits, dim=-1)
+        # selected_log_probs = torch.gather(
+        #     log_probs,
+        #     dim=-1,
+        #     index=shift_labels.unsqueeze(-1)
+        # ).squeeze(-1)
         
-        positions = torch.arange(selected_log_probs.size(1), device=logits.device).unsqueeze(0)
-        response_mask = positions >= starting_positions.unsqueeze(1)
-        final_log_probs = selected_log_probs * response_mask
+        # positions = torch.arange(selected_log_probs.size(1), device=logits.device).unsqueeze(0)
+        # response_mask = positions >= starting_positions.unsqueeze(1)
+        # final_log_probs = selected_log_probs * response_mask
         
-        final_log_probs = final_log_probs.sum(dim=1)
+        # final_log_probs = final_log_probs.sum(dim=1)
         
         # final prompt token -- i.e. start of prompt and response
         
@@ -495,6 +525,7 @@ class RewardDataset:
         # return selected_log_probs.sum().item()
 
     def get_dataset(self):
+        
         return self.dataset
         
 if __name__ == '__main__':

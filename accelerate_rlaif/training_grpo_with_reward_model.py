@@ -4,6 +4,7 @@ from peft import LoraConfig, TaskType
 from transformers import AutoModelForSequenceClassification, AutoTokenizer, PretrainedConfig, BitsAndBytesConfig
 from trl import GRPOTrainer, GRPOConfig
 from datasets import Dataset
+import matplotlib.pyplot as plt
 
 import os
 
@@ -28,6 +29,12 @@ BASE_MODEL = "Qwen/Qwen2-0.5B"
 FINAL_MODEL_NAME = "/models/grpo_model_constitution_FINAL"
 OUTPUT_DIR = "./grpo_model_constitution_checkpoints"
 REWARD_MODEL_PATH = "models/final_reward_model"
+
+GRPO_MODEL_BATCH_SIZE = 2
+
+
+# Log every X updates steps
+logging_steps = 5
 
 # ---- QUANTIZATION CONFIGURATION ----
 # NOTE: Not able to use bf16 because we're using NVIDIA 2080 GPUs
@@ -57,6 +64,9 @@ def train_with_grpo(dataset: Dataset,
                     reward_model_path_or_name: str = REWARD_MODEL_PATH,
                     model_path_or_name: str = BASE_MODEL, 
                     output_directory: str = OUTPUT_DIR):
+    
+    final_model_path = os.path.abspath(grpo_model_path_or_name)
+    print("Final model will be saved to:", final_model_path)
     
     # with accelerator.main_process_first():
     reward_model = AutoModelForSequenceClassification.from_pretrained(
@@ -91,14 +101,15 @@ def train_with_grpo(dataset: Dataset,
 
     grpo_config = GRPOConfig(
         output_dir=output_directory,
-        per_device_train_batch_size=1,
+        per_device_train_batch_size=GRPO_MODEL_BATCH_SIZE,
         gradient_accumulation_steps=8,
-        num_train_epochs=3,
+        num_train_epochs=1,
         fp16=True,
         bf16=False,
         save_strategy="no",
         max_completion_length = 128,        
         max_prompt_length = 128,
+        logging_steps = logging_steps,
 
         # NOTE: Gradient checkpointing should be enabled in the future
         gradient_checkpointing=False,
@@ -106,6 +117,9 @@ def train_with_grpo(dataset: Dataset,
         # NOTE: Ideally, this would be the case
         # gradient_checkpointing=True,
         ddp_find_unused_parameters=False,
+        
+        # NOTE: reporting to tensorboard 
+        report_to="tensorboard"
     )
 
     grpo_trainer = GRPOTrainer(
@@ -130,10 +144,31 @@ def train_with_grpo(dataset: Dataset,
         
         # Save the GRPO log
         log_path = os.path.join(output_directory, "grpo_log.json")
-        if accelerator.is_local_main_process:
-            with open(log_path, "w") as log_file:
-                json.dump(grpo_log, log_file, indent=4)
-    
+        with open(log_path, "w") as log_file:
+            json.dump(grpo_log, log_file, indent=4)
+                
+        # Extract training loss, rewards, and steps
+        # steps = list(range(1, len(grpo_log) + 1))
+        # losses = [entry.get("train_loss") for entry in grpo_log if "train_loss" in entry]
+        # rewards = [entry.get("reward") for entry in grpo_log if "reward" in entry]
+        
+        # if steps and losses:
+        #     plt.figure(figsize=(10, 6))
+        #     plt.plot(steps, losses, label="Training Loss")
+        #     # if rewards:
+        #     #     plt.plot(steps, rewards, label="Reward", linestyle="--")
+        #     plt.xlabel("Steps")
+        #     plt.ylabel("Value")
+        #     plt.title("GRPO Training Loss and Reward Over Steps")
+        #     plt.legend()
+        #     plt.grid()
+            
+        #     # Save the plot
+        #     plot_path = os.path.join(output_directory, "grpo_training_loss_and_reward.png")
+        #     plt.savefig(plot_path)
+        #     plt.close()
+        # else:
+        #     print("No valid 'train_loss' or 'reward' entries found in GRPO log. Skipping plot generation.")
     
     final_model = accelerator.unwrap_model(grpo_trainer.model)
     final_model = final_model.merge_and_unload()
@@ -145,7 +180,8 @@ def train_with_grpo(dataset: Dataset,
 
     if accelerator.is_local_main_process: 
         # Save the final reward model
-        final_model_path = os.path.abspath(grpo_model_path_or_name)
+        print("Saving final model to:", final_model_path)
+
         final_model.save_pretrained(final_model_path)
         grpo_trainer.tokenizer.save_pretrained(final_model_path)
 
