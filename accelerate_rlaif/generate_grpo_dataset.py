@@ -86,7 +86,7 @@ class RewardDataset:
             prompt_iterator = get_pytorch_iterator(['hh'], 
                                                 tokenizer=self.tokenizer, 
                                                 split='train', 
-                                                batch_size=4, 
+                                                batch_size=32, 
                                                 sft_mode=True,
                                                 seed=0, 
                                                 n_epochs=1, 
@@ -118,6 +118,25 @@ class RewardDataset:
 
         self.__generate_completions_and_scores()
 
+    def __format_reward_dataset(self, example):
+        chosen_text = example["prompt"] + example["chosen"]
+        rejected_text = example["prompt"] + example["rejected"]
+        
+        margin = float(example["margin"]) 
+        
+        # Swap chosen and rejected if margin is negative, and take absolute value of margin
+        if margin < 0:
+            example["chosen"] = rejected_text
+            example["rejected"] = chosen_text
+            example["margin"] = abs(margin)
+        
+        return example
+
+    def __normalize_margin(self, example, max_margin):
+        # This ensures all margins fall between 0.0 and 1.0
+        example["margin"] = example["margin"] / max_margin
+        return example
+
     def __generate_completions_and_scores(self):
         
         dataset = []
@@ -137,9 +156,16 @@ class RewardDataset:
             processed_data = self.__process_prompt_batches(batch)
             dataset.extend(processed_data)
             
-        self.dataset = gather_iterator_batches(dataset,
+        raw_dataset = gather_iterator_batches(dataset,
                                                self.accelerator,
                                                self.prompt_iterator)
+        
+        margins = [item["margin"] for item in raw_dataset]
+        
+        max_margin = max(margins) 
+
+        raw_dataset = [self.__normalize_margin(example, max_margin) for example in raw_dataset]
+        self.dataset = [self.__format_reward_dataset(example) for example in raw_dataset]
             
     def __tokenize_batches(self, prompt_batches):
         
@@ -499,6 +525,7 @@ class RewardDataset:
         # return selected_log_probs.sum().item()
 
     def get_dataset(self):
+        
         return self.dataset
         
 if __name__ == '__main__':

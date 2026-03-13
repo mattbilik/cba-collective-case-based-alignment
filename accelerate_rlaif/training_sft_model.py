@@ -20,6 +20,7 @@ import time
 from accelerate import Accelerator
 from helpers.load_data_funcs import load_dataset_from_path
 import sys
+import matplotlib.pyplot as plt
 
 os.environ["WANDB_DISABLED"] = "true"
 
@@ -119,7 +120,7 @@ warmup_ratio = 0.03
 save_steps = 25
 
 # Log every X updates steps
-logging_steps = 25
+logging_steps = 5
 
 # --------------- Load and Prepare Dataset -----------------
 
@@ -204,7 +205,8 @@ def finetune_sft(accelerator: Accelerator,
         fp16=True, # or bf16=True
         report_to="tensorboard",
         ddp_find_unused_parameters=False,
-        num_train_epochs=num_train_epochs
+        num_train_epochs=num_train_epochs,
+        logging_steps=logging_steps
     )
     
     # TRL calls get_peft_model() automatically with peft_config
@@ -229,21 +231,21 @@ def finetune_sft(accelerator: Accelerator,
             json.dump(sft_log, log_file, indent=4)
                 
         # # Extract training loss and steps
-        # steps = [entry["step"] for entry in sft_log if "train_loss" in entry]
-        # losses = [entry["train_loss"] for entry in sft_log if "train_loss" in entry]
+        steps = [entry["step"] for entry in sft_log if "train_loss" in entry]
+        losses = [entry["train_loss"] for entry in sft_log if "train_loss" in entry]
         
-        # plt.figure(figsize=(10, 6))
-        # plt.plot(steps, losses, label="Training Loss", marker="o")
-        # plt.xlabel("Steps")
-        # plt.ylabel("Loss")
-        # plt.title("Training Loss Over Steps")
-        # plt.legend()
-        # plt.grid()
+        plt.figure(figsize=(10, 6))
+        plt.plot(steps, losses, label="Training Loss", marker="o")
+        plt.xlabel("Steps")
+        plt.ylabel("Loss")
+        plt.title("Training Loss Over Steps")
+        plt.legend()
+        plt.grid()
         
-        # # Save the figure
-        # figure_path = "training_loss.png"
-        # plt.savefig(figure_path)
-        # plt.close()
+        # Save the figure
+        figure_path = "training_loss.png"
+        plt.savefig(figure_path)
+        plt.close()
         
     final_model = accelerator.unwrap_model(sft_trainer.model)
     final_model = final_model.merge_and_unload()

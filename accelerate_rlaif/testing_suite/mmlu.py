@@ -16,6 +16,8 @@ from lmformatenforcer.integrations.transformers import (
     build_transformers_prefix_allowed_tokens_fn,
 )
 
+from accelerate import Accelerator
+
 class CustomRLAIFModel(DeepEvalBaseLLM):
     def __init__(self, model_name, base_model_name):        
         
@@ -100,11 +102,11 @@ class LoggingModel:
     def __init__(self, model):
         self.model = model
 
-    def generate(self, prompt: str, schema: BaseModel, device) -> BaseModel:
+    def generate(self, prompt: str, schema: BaseModel) -> BaseModel:
         print("\n================ PROMPT ================\n")
         print(prompt)
 
-        output = self.model.generate(prompt, schema, device)
+        output = self.model.generate(prompt, schema)
 
         print("\n================ RAW OUTPUT ================\n")
         print(output)
@@ -184,6 +186,8 @@ def test_deepeval_benchmarks(model_name, base_model_name) -> int:
 
 if __name__ == "__main__":
 
+    accelerator = Accelerator()
+    
     if len(sys.argv) != 3:
         print("Usage: accelerate mmlu.py <model_name> <base_model_name>")
         sys.exit(1)

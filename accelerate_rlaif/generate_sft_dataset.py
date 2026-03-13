@@ -379,6 +379,7 @@ def create_revisions(model_name: str = 'Qwen/Qwen2-7B',
     accelerator.wait_for_everyone()
 
     return final_responses
+
     # if accelerator.is_local_main_process:
     #     dump_files(final_responses, args['base_output_dir'])
     
