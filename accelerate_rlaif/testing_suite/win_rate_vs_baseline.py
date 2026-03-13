@@ -296,7 +296,7 @@ if __name__ == "__main__":
     judgments = judge_outputs(judge_model, tokenizer, constitution, accelerator, prompts, trained_responses, baseline_responses, 4)
 
     #shooould be win rate?
-    print((judgments > 0.5).sum() / judgments.shape[0])
+    print(f"Win rate: {(judgments > 0.5).sum() / judgments.shape[0]}")
     
     #avg margin of victory
-    print((judgments).mean())
+    print(f"Margin of victory: {(judgments).mean()}")
