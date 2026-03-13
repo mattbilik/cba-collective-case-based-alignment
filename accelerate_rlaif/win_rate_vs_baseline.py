@@ -122,18 +122,6 @@ def generate_test_responses(model: AutoModelForCausalLM,
     responses = []
     prompt_idx = 0
 
-
-    
-def get_completions(input_ids,
-                    attention_mask,
-                    model,
-                    accelerator,
-                    tokenizer,
-                    temperature=1,
-                    max_new_tokens=200):
-    
-
-
     for batch in tqdm(dataset, desc="Processing batches"):
         prompt_idx += 1        
         final_completion = get_completions(batch["input_ids"],
