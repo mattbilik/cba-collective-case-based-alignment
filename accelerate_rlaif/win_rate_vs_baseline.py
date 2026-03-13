@@ -173,7 +173,7 @@ def get_dataset(dataset_name, batch_size, tokenizer, n_examples):
                                              prefs_path=None,
                                              sampled_data_dir=None,
                                              text_preprocessing_func = prompt_from_hh_anthropic,
-                                             num_examples = args["num_completions"],
+                                            #  num_examples = args["num_completions"],
         )
     return prompt_iterator
 
