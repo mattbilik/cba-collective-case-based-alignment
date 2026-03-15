@@ -30,8 +30,7 @@ FINAL_MODEL_NAME = "/models/grpo_model_constitution_FINAL"
 OUTPUT_DIR = "./grpo_model_constitution_checkpoints"
 REWARD_MODEL_PATH = "models/final_reward_model"
 
-GRPO_MODEL_BATCH_SIZE = 2
-
+GRPO_MODEL_BATCH_SIZE = 16
 
 # Log every X updates steps
 logging_steps = 5

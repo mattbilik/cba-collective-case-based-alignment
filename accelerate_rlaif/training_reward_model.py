@@ -1,3 +1,4 @@
+import json
 import torch
 import torch.distributed as dist
 
@@ -42,6 +43,7 @@ def train_reward_model(dataset: Dataset,
         )
 
     # 3. Add the classification head to modules_to_save
+    
     peft_config = LoraConfig(
         task_type=TaskType.SEQ_CLS,
         inference_mode=False,
@@ -52,7 +54,7 @@ def train_reward_model(dataset: Dataset,
     )
     training_args = RewardConfig(
         output_dir=output_directory,
-        num_train_epochs=3,
+        num_train_epochs=20,
         per_device_train_batch_size=REWARD_MODEL_BATCH_SIZE,
         learning_rate=2e-5,
         logging_steps=logging_steps,
@@ -72,6 +74,18 @@ def train_reward_model(dataset: Dataset,
     
     # NOTE: we need to be unwrapping the model so that we are able to clear up space
     reward_model_trainer.train()
+    
+    if accelerator.is_local_main_process: 
+
+        reward_log = reward_model_trainer.state.log_history
+        
+        # Save the reward log
+        log_path = os.path.join(output_directory, "reward_log.json")
+        with open(log_path, "w") as log_file:
+            json.dump(reward_log, log_file, indent=4)
+
+    accelerator.wait_for_everyone()
+    
     unwrapped_model = accelerator.unwrap_model(reward_model_trainer.model)
     
     # NOTE: Maybe move to CPU? Or figure out what accelerate is doing with it

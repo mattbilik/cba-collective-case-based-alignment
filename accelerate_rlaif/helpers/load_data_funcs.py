@@ -104,7 +104,7 @@ def load_dataset_from_path(dataset_path: str):
     with open(dataset_path, 'r') as f:
         data = json.load(f)
 
-    print(data)
+    # print(data)
         
     dataset = Dataset.from_list(data)
         

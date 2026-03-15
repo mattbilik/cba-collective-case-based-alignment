@@ -2,7 +2,7 @@ import os
 import json
 import random
 import sys
-from hh_preferences.preference_datasets import get_batch_iterator
+from hh_preferences.preference_datasets import get_batch_iterator, get_pytorch_iterator
 from hh_preferences.utils import prompt_from_hh_anthropic
 from accelerate import Accelerator
 from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
@@ -110,6 +110,26 @@ class JudgmentDataset(Dataset):
             return {"A": tokenized_with_A, "B": tokenized_with_B, "p_len": torch.tensor(p_len)}
 
 
+# NOTE: added tokenize batches but want to not be using the chat template right?
+def tokenize_batches(tokenizer, prompt_batches):
+    
+    tokenized_batches = [
+        [{"role": "user", "content": prompt}]
+        
+        for prompt in prompt_batches
+    ]
+    
+    tokenized_batches = tokenizer.apply_chat_template(
+        tokenized_batches,
+        tokenize=True,
+        add_generation_prompt=True,
+        return_tensors="pt",
+        padding=True,
+        return_dict=True
+    ) 
+    
+    return tokenized_batches
+
 def generate_test_responses(model: AutoModelForCausalLM,
                      tokenizer: AutoTokenizer,
                      accelerator: Accelerator,
@@ -124,6 +144,9 @@ def generate_test_responses(model: AutoModelForCausalLM,
 
     for batch in tqdm(dataset, desc="Processing batches"):
         prompt_idx += 1        
+        
+        batch = tokenize_batches(tokenizer, batch)
+        
         final_completion = get_completions(batch["input_ids"],
                                            batch["attention_mask"],
                                            model,
@@ -155,7 +178,7 @@ def fetch_model(model_path_or_name):
 
 def get_dataset(dataset_name, batch_size, tokenizer, n_examples):
     if dataset_name == "hh":
-        prompt_iterator = get_batch_iterator(['hh'],
+        prompt_iterator = get_pytorch_iterator(['hh'],
                                              tokenizer=tokenizer,
                                              split='train', #this only has a train split so this arg is useless -- we need some proper way of consistent train test split across scripts
                                              batch_size=batch_size,
@@ -266,11 +289,24 @@ if __name__ == "__main__":
 
         with open(constitution_file_path, 'r') as f:
             constitution = json.load(f)
-        trained_model, tokenizer = fetch_model(trained_model_path)
-        baseline_model, _ = fetch_model(baseline_model_path_or_name)
+            
+        trained_model, _ = fetch_model(trained_model_path)
+        
+        # NOTE: using the base model tokenizer for now
+        print("Baseline model path or name:", baseline_model_path_or_name)
+        baseline_model, tokenizer = fetch_model(baseline_model_path_or_name)
+        
+        print(f"Tokenizer type: {type(tokenizer)}")
         
         batched_test_dataset = get_dataset(dataset_name, 4, tokenizer, 100)
-        prompts = [x for x in get_dataset(dataset_name, 1, None, 100)]
+        
+        # TODO: error re: tokenizer
+        print("Getting prompts")
+        
+        # Assuming that this is not tokenized?
+        prompts = [x for x in get_dataset(dataset_name, 1, tokenizer, 100)]
+
+        # prompts = [x for x in get_dataset(dataset_name, 1, None, 100)]
         
     trained_responses = generate_test_responses(trained_model, tokenizer, accelerator, batched_test_dataset)
  
