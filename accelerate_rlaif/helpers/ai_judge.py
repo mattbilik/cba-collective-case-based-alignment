@@ -181,8 +181,8 @@ def judge_outputs(judge_model, tokenizer, accelerator, judgment_case_iterator, b
     final_scores = gather_iterator_batches(final_scores,
                                         accelerator,
                                         judgment_case_iterator)
-    
-    return torch.tensor(final_scores)
+    if accelerator.is_main_process:
+        return torch.tensor(final_scores)
 
 #to account for randomized order, we should do 1-judgments where A_first == 0
 def reorder_judgments(judgments, A_first):
@@ -219,15 +219,18 @@ def generate_responses_and_judgments(response_model1, response_model2, judge_mod
     #create dataset of triples
     judgment_cases = JudgmentDataset(prompts, response_1s, response_2s, tokenizer, constitution)
     judgment_collator = get_judgment_collate_fn(tokenizer)
-    judgment_case_iterator = DataLoader(judgment_cases, batch_size = batch_size, collate_fn = judgment_collator)
+    
+    #dividing batch_size by two here because judging cases seems a bit more mem intensive than generating responses?
+    #not sure why though need to investigate further
+    judgment_case_iterator = DataLoader(judgment_cases, batch_size = batch_size//2, collate_fn = judgment_collator)
     judge_model = accelerator.prepare(judge_model)
     judgment_case_iterator = accelerator.prepare(judgment_case_iterator)
 
     judgments = judge_outputs(judge_model, tokenizer, accelerator, judgment_case_iterator, 4)
-
-    judgments = reorder_judgments(judgments, judgment_cases.order)
-    return {
-        "response1s": response_1s,
-        "response2s": response_2s,
-        "judgments": judgments
-    }
+    if accelerator.is_main_process:
+        judgments = reorder_judgments(judgments, judgment_cases.order)
+        return {
+            "response1s": response_1s,
+            "response2s": response_2s,
+            "judgments": judgments
+        }
