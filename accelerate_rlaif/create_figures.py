@@ -149,7 +149,10 @@ def create_figure_for_reward_model(reward_model_json_path: str,
     plt.savefig(os.path.join(output_figure_path, 'reward_model_plot.png'))
 
 if __name__ == "__main__":
-    results_json_path = sys.argv[1]
-    output_figure_path = sys.argv[2]
+    results_json_path_grpo = sys.argv[1]
+    results_json_path_reward_model = sys.argv[2]
     
-    create_training_log_figure(results_json_path, output_figure_path)  
+    output_figure_path = sys.argv[3]
+    
+    create_training_log_figure(results_json_path_grpo, output_figure_path)  
+    create_figure_for_reward_model(results_json_path_reward_model, output_figure_path)
