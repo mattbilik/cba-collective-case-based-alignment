@@ -263,6 +263,9 @@ def compute_rewards(reward_model, batch, accelerator):
             attention_mask=inputs["attention_mask"]
         )
         
+    # We're getting the logits from the output and then squeezing to get a single reward scalar for each batch item
+    print("OUTPUT SHAPE:", output.logits.shape)
+    
     reward_scalar = output.logits.squeeze(-1)
     
     return reward_scalar
