@@ -239,16 +239,41 @@ def generate_responses_and_judgments(response_model1, response_model2, judge_mod
 
 # --------------- REWARD JUDGE ----------------------
 
+
+def compute_rewards(reward_model, batch, accelerator):
+    
+    inputs = {
+        "input_ids": batch['prompt_input_ids'],
+        "attention_mask": batch['prompt_attention_mask']
+    }
+        
+    inputs["input_ids"] = inputs["input_ids"].to(accelerator.device)
+    inputs["attention_mask"] = inputs["attention_mask"].to(accelerator.device)
+
+    # Output is a matrix [batch size, reward for batch item]
+    
+    # NOTE: are we getting one reward per batch item or one reward per label?
+    # batch item I think
+    
+    with torch.inference_mode():    
+        output = reward_model.generate(
+            inputs["input_ids"],
+            do_sample=True,
+            attention_mask=inputs["attention_mask"]
+        )
+    
+    return output
+
 def judge_outputs_reward(reward_model, accelerator, judgment_case_iterator):
     final_scores = []
     
     for batch in tqdm(judgment_case_iterator, desc="Processing batches"):
         
-        # Apply reward model on all batch items
-        batch["A"]
-        batch["B"]
+        # Compute reward for all batch items
         
-        
+        compute_rewards(reward_model, batch["A"], accelerator)
+        compute_rewards(reward_model, batch["B"], accelerator)
+
         # final_scores.extend(scores.cpu().tolist())
     
     final_scores = gather_iterator_batches(final_scores,
