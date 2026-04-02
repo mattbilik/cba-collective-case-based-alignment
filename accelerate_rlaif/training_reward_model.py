@@ -38,6 +38,7 @@ def train_reward_model(dataset: Dataset,
             
     model = AutoModelForSequenceClassification.from_pretrained(
             model_path_or_name,
+            # NOTE: do we want to be using one label here?
             num_labels=1,
             pad_token_id=tokenizer.pad_token_id
         )

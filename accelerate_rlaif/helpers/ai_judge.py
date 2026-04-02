@@ -188,6 +188,9 @@ def judge_outputs(judge_model, tokenizer, accelerator, judgment_case_iterator, b
 def reorder_judgments(judgments, A_first):
     return torch.where(A_first == 1, judgments, 1 - judgments)
 
+
+# --------------- LOG PROB JUDGE ----------------------
+
 def generate_responses_and_judgments(response_model1, response_model2, judge_model, accelerator, tokenizer, constitution, dataloader, batch_size):
     
     prompts = sum([batch["prompt"] for batch in dataloader], [])
@@ -201,7 +204,6 @@ def generate_responses_and_judgments(response_model1, response_model2, judge_mod
     del model
     gc.collect()                                                                                                                                                                                                        
     torch.cuda.empty_cache()                                                                                                                                                                                         
-
 
     #prepare response_model2 for parallel inference and run on test set
     model = accelerator.prepare(response_model2)
@@ -234,3 +236,62 @@ def generate_responses_and_judgments(response_model1, response_model2, judge_mod
             "response2s": response_2s,
             "judgments": judgments
         }
+
+# --------------- REWARD JUDGE ----------------------
+
+def judge_outputs_reward(reward_model, accelerator, judgment_case_iterator):
+    final_scores = []
+    
+    for batch in tqdm(judgment_case_iterator, desc="Processing batches"):
+        
+        # Apply reward model on all batch items
+        batch["A"]
+        batch["B"]
+        
+        
+        # final_scores.extend(scores.cpu().tolist())
+    
+    final_scores = gather_iterator_batches(final_scores,
+                                           accelerator,
+                                           judgment_case_iterator)
+    if accelerator.is_main_process:
+        return torch.tensor(final_scores)
+
+def generate_rewards_and_judgements(response_model1, response_model2, reward_model, accelerator, tokenizer, constitution, dataloader, batch_size):
+    
+    # These are the prompts from our test set that we want to generate responses for and then score with the reward model
+    prompts = sum([batch["prompt"] for batch in dataloader], [])
+
+    # Generating responses from our first model:
+    model = accelerator.prepare(response_model1)
+    dataloader =  accelerator.prepare(dataloader)    
+    accelerator.wait_for_everyone()
+    response_1s = generate_test_responses(model, tokenizer, accelerator, dataloader) 
+
+    accelerator.free_memory()
+    del model
+    gc.collect()                                                                                                                                                                                                        
+    torch.cuda.empty_cache()     
+    
+    # Generating responses from our second model:                                                                                                                                                                                    
+    model = accelerator.prepare(response_model2)
+    accelerator.wait_for_everyone()
+    response_2s = generate_test_responses(model, tokenizer, accelerator, dataloader)
+
+    accelerator.free_memory()
+    del model
+    gc.collect()                                                                                                                                                                                                        
+    torch.cuda.empty_cache()                                                                                                                                                                                         
+
+
+    judgment_cases = JudgmentDataset(prompts, response_1s, response_2s, tokenizer, constitution)
+    judgment_collator = get_judgment_collate_fn(tokenizer)
+
+    judgment_case_iterator = DataLoader(judgment_cases, batch_size = batch_size//2, collate_fn = judgment_collator)
+    
+    reward_model = accelerator.prepare(reward_model)
+    judgment_case_iterator = accelerator.prepare(judgment_case_iterator)
+    
+    judgments = judge_outputs_reward(reward_model, accelerator, judgment_case_iterator)
+
+    pass

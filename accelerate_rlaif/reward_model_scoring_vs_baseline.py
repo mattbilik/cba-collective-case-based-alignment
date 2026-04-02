@@ -2,17 +2,12 @@ import os
 import json
 import random
 import sys
-from hh_preferences.preference_datasets import get_pytorch_iterator, get_collate_fn
-from hh_preferences.utils import prompt_from_hh_anthropic
-from helpers.load_data_funcs import load_dataset_from_path
+from hh_preferences.preference_datasets import get_pytorch_iterator
 from accelerate import Accelerator
-from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
-from sentence_transformers import SentenceTransformer
+from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig, AutoModelForSequenceClassification
 import torch
-from torch.utils.data import Dataset, DataLoader
 
-from helpers.model_funcs import get_completions
-from helpers.ai_judge import generate_responses_and_judgments
+from helpers.ai_judge import generate_rewards_and_judgements
 
 CASE_REGIME = "constitution"
 
@@ -42,7 +37,8 @@ if __name__ == "__main__":
     
     trained_model_path = sys.argv[1]
     baseline_model_path_or_name = sys.argv[2]
-    judge_model_path_or_name = sys.argv[3]
+    reward_model_path_or_name = sys.argv[3]
+    
     constitution_path = sys.argv[4]
     dataset_name = sys.argv[5]
     accelerator = Accelerator()
@@ -51,7 +47,6 @@ if __name__ == "__main__":
     with open(constitution_path) as f:
         constitution = json.load(f)
 
-    #not sure if we even want all three of these on CPU all at once to begin with?
     with accelerator.main_process_first():
 
         tokenizer = AutoTokenizer.from_pretrained(trained_model_path,
@@ -70,12 +65,13 @@ if __name__ == "__main__":
                     quantization_config=bnb_config,
                 )
 
-        judge_model = AutoModelForCausalLM.from_pretrained(
-                    judge_model_path_or_name,
-                    torch_dtype=compute_dtype,
-                    quantization_config=bnb_config,
-                )
-
+        reward_model = AutoModelForSequenceClassification.from_pretrained(
+            reward_model_path_or_name,
+            torch_dtype=compute_dtype,
+            quantization_config=bnb_config,
+            num_labels=1,
+            pad_token_id=tokenizer.pad_token_id
+        )
 
         prompt_iterator = get_pytorch_iterator([dataset_name], 
                                             tokenizer=tokenizer, 
@@ -93,7 +89,8 @@ if __name__ == "__main__":
                                             sampled_data_dir=None,
                                         )
             
-    judgments = generate_responses_and_judgments(trained_model, baseline_model, judge_model, accelerator, tokenizer, constitution, prompt_iterator, batch_size=batch_size)
+    judgments = generate_rewards_and_judgements(trained_model, baseline_model, reward_model, accelerator, tokenizer, constitution, prompt_iterator, batch_size=batch_size)
+    
     if accelerator.is_main_process:
         #shooould be win rate?
         print("Win rate", (judgments["judgments"] > 0.5).sum() / judgments["judgments"].shape[0])
