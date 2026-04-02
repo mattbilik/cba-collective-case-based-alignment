@@ -41,8 +41,6 @@ def train_reward_model(dataset: Dataset,
             num_labels=1,
             pad_token_id=tokenizer.pad_token_id
         )
-
-    # 3. Add the classification head to modules_to_save
     
     peft_config = LoraConfig(
         task_type=TaskType.SEQ_CLS,
@@ -50,8 +48,11 @@ def train_reward_model(dataset: Dataset,
         r=8,
         lora_alpha=32,
         lora_dropout=0.1,
-        modules_to_save=["score"] # <--- Crucial fix
+        
+        # Saving the score head
+        modules_to_save=["score"]
     )
+    
     training_args = RewardConfig(
         output_dir=output_directory,
         num_train_epochs=20,

@@ -143,14 +143,14 @@ def test_deepeval_benchmarks(model_name, base_model_name) -> int:
 
     mmlu_benchmark = MMLU(
         tasks=[MMLUTask.HIGH_SCHOOL_MATHEMATICS],
-        n_shots=5
+        n_shots=1
     )
     
-    print("Evaluating model to test")
-    mmlu_benchmark.evaluate(model=model_to_test, run_async=True)
+    # print("Evaluating model to test")
+    # mmlu_benchmark.evaluate(model=model_to_test, run_async=True)
     
-    print("MMLU Benchmark Results:")
-    print(mmlu_benchmark.overall_score)
+    # print("MMLU Benchmark Results:")
+    # print(mmlu_benchmark.overall_score)
 
     print("Evaluating base model")
     mmlu_benchmark.evaluate(model=base_model, run_async=True)

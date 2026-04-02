@@ -102,13 +102,16 @@ def train_with_grpo(dataset: Dataset,
         output_dir=output_directory,
         per_device_train_batch_size=GRPO_MODEL_BATCH_SIZE,
         gradient_accumulation_steps=8,
-        num_train_epochs=1,
+        num_train_epochs=8,
         fp16=True,
         bf16=False,
         save_strategy="no",
-        max_completion_length = 128,        
-        max_prompt_length = 128,
+        max_completion_length = 512,        
+        max_prompt_length = 512,
         logging_steps = logging_steps,
+
+        # BROKEN BUT FIX! RuntimeError: expected scalar type Float but found Half
+        # model_init_kwargs={"quantization_config": bnb_config},
 
         # NOTE: Gradient checkpointing should be enabled in the future
         gradient_checkpointing=False,
@@ -132,7 +135,7 @@ def train_with_grpo(dataset: Dataset,
         processing_class=reward_tokenizer,
     )
     
-    grpo_trainer.model.quantization_config = bnb_config
+    # grpo_trainer.model.quantization_config = bnb_config
         
     grpo_trainer.train()
     accelerator.wait_for_everyone()

@@ -131,34 +131,34 @@ def tokenize_batches(tokenizer, prompt_batches):
     return tokenized_batches
 
 def generate_test_responses(model: AutoModelForCausalLM,
-                     tokenizer: AutoTokenizer,
-                     accelerator: Accelerator,
-                     dataset):
+                            tokenizer: AutoTokenizer,
+                            accelerator: Accelerator,
+                            dataset):
     
     # We are preparing the model and the iterator here for
-    model = accelerator.prepare(model)
-    dataset =  accelerator.prepare(dataset)    
+    model, prompt_iterator = accelerator.prepare(model, dataset)
+    
     accelerator.wait_for_everyone()
     responses = []
     prompt_idx = 0
 
-    for batch in tqdm(dataset, desc="Processing batches"):
+    for batch in tqdm(prompt_iterator, desc="Processing batches"):
         prompt_idx += 1        
         
         batch = tokenize_batches(tokenizer, batch)
         
         final_completion = get_completions(batch["input_ids"],
                                            batch["attention_mask"],
-                                           model,
+                                           accelerator.unwrap_model(model),
                                            accelerator,
-                                           tokenizer
-                                          )
+                                           tokenizer)
+        
         final_completion = accelerator.gather_for_metrics(final_completion)
         responses.extend(final_completion)
     
     responses = gather_iterator_batches(responses,
                                         accelerator,
-                                        dataset)
+                                        prompt_iterator)
 
     return responses
 
@@ -176,7 +176,7 @@ def fetch_model(model_path_or_name):
     return model, tokenizer
 
 
-def get_dataset(dataset_name, batch_size, tokenizer, n_examples):
+def get_dataset_iterator(dataset_name, batch_size, tokenizer, n_examples):
     if dataset_name == "hh":
         prompt_iterator = get_pytorch_iterator(['hh'],
                                              tokenizer=tokenizer,
@@ -263,11 +263,17 @@ def judge_outputs(judge_model, tokenizer, constitution, accelerator, prompts, tr
     judge_model = accelerator.prepare(judge_model)
     judgment_case_iterator = accelerator.prepare(judgment_case_iterator)
     final_scores = []
+    
     for batch in tqdm(judgment_case_iterator, desc="Processing batches"):
         scores = score_batch(judge_model, accelerator, batch)
         scores = accelerator.gather_for_metrics(scores)
         final_scores.extend(scores.cpu().tolist())
+        
+        print(f"Current win rate: {(final_scores > 0.5).sum() / len(final_scores)}")
+        print(f"Current margin of victory: {(final_scores).mean()}")
     
+    
+    # Gathering batches from all GPUs
     final_scores = gather_iterator_batches(final_scores,
                                         accelerator,
                                         judgment_case_iterator)
@@ -298,20 +304,20 @@ if __name__ == "__main__":
         
         print(f"Tokenizer type: {type(tokenizer)}")
         
-        batched_test_dataset = get_dataset(dataset_name, 4, tokenizer, 100)
+        batched_test_dataset = get_dataset_iterator(dataset_name, 4, tokenizer, 100)
         
         # TODO: error re: tokenizer
         print("Getting prompts")
         
         # Assuming that this is not tokenized?
-        prompts = [x for x in get_dataset(dataset_name, 1, tokenizer, 100)]
+        prompts = [x for x in get_dataset_iterator(dataset_name, 1, tokenizer, 100)]
 
-        # prompts = [x for x in get_dataset(dataset_name, 1, None, 100)]
+        # prompts = [x for x in get_dataset_iterator(dataset_name, 1, None, 100)]
         
     trained_responses = generate_test_responses(trained_model, tokenizer, accelerator, batched_test_dataset)
  
     #get a fresh dataset that isn't wrapped by accelerate 
-    batched_test_dataset = get_dataset(dataset_name, 4, tokenizer, 100)
+    batched_test_dataset = get_dataset_iterator(dataset_name, 4, tokenizer, 100)
     baseline_responses = generate_test_responses(baseline_model, tokenizer, accelerator, batched_test_dataset)
     
     #need a model that hasn't been wrapped by accelerate yet (?)
