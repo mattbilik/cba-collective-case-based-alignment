@@ -270,7 +270,6 @@ def judge_outputs_reward(reward_model, accelerator, judgment_case_iterator):
     for batch in tqdm(judgment_case_iterator, desc="Processing batches"):
         
         # Compute reward for all batch items
-        
         compute_rewards(reward_model, batch["A"], accelerator)
         compute_rewards(reward_model, batch["B"], accelerator)
 
@@ -307,7 +306,6 @@ def generate_rewards_and_judgements(response_model1, response_model2, reward_mod
     del model
     gc.collect()                                                                                                                                                                                                        
     torch.cuda.empty_cache()                                                                                                                                                                                         
-
 
     judgment_cases = JudgmentDataset(prompts, response_1s, response_2s, tokenizer, constitution)
     judgment_collator = get_judgment_collate_fn(tokenizer)
