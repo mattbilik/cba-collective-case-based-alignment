@@ -239,7 +239,6 @@ def generate_responses_and_judgments(response_model1, response_model2, judge_mod
 
 # --------------- REWARD JUDGE ----------------------
 
-
 def compute_rewards(reward_model, batch, accelerator):
     
     reward_model.eval()
@@ -271,7 +270,6 @@ def compute_rewards(reward_model, batch, accelerator):
     
     print("Output shape should be [BATCH_SIZE]:", output.logits.shape)
 
-    
     return reward_scalar
 
 def judge_outputs_reward(reward_model, accelerator, judgment_case_iterator):
@@ -282,8 +280,12 @@ def judge_outputs_reward(reward_model, accelerator, judgment_case_iterator):
         # Compute reward for all batch items
         reward_A = compute_rewards(reward_model, batch["A"], accelerator)
         reward_B = compute_rewards(reward_model, batch["B"], accelerator)
-
-        # final_scores.extend(scores.cpu().tolist())
+        
+        # NOTE: do we want to be doing this?
+        # yes because the probability goes up when reward_A is higher than reward_B
+        scores = torch.sigmoid(reward_A - reward_B)
+        
+        final_scores.extend(scores.cpu().tolist())
     
     final_scores = gather_iterator_batches(final_scores,
                                            accelerator,
@@ -327,4 +329,10 @@ def generate_rewards_and_judgements(response_model1, response_model2, reward_mod
     
     judgments = judge_outputs_reward(reward_model, accelerator, judgment_case_iterator)
 
-    pass
+    if accelerator.is_main_process:
+        judgments = reorder_judgments(judgments, judgment_cases.order)
+        return {
+            "response1s": response_1s,
+            "response2s": response_2s,
+            "judgments": judgments
+        }
