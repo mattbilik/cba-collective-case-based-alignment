@@ -242,6 +242,8 @@ def generate_responses_and_judgments(response_model1, response_model2, judge_mod
 
 def compute_rewards(reward_model, batch, accelerator):
     
+    reward_model.eval()
+    
     inputs = {
         "input_ids": batch['prompt_input_ids'],
         "attention_mask": batch['prompt_attention_mask']
@@ -256,13 +258,14 @@ def compute_rewards(reward_model, batch, accelerator):
     # batch item I think
     
     with torch.inference_mode():    
-        output = reward_model.generate(
+        output = reward_model(
             inputs["input_ids"],
-            do_sample=True,
             attention_mask=inputs["attention_mask"]
         )
+        
+    reward_scalar = output.logits.squeeze(-1)
     
-    return output
+    return reward_scalar
 
 def judge_outputs_reward(reward_model, accelerator, judgment_case_iterator):
     final_scores = []
@@ -270,8 +273,8 @@ def judge_outputs_reward(reward_model, accelerator, judgment_case_iterator):
     for batch in tqdm(judgment_case_iterator, desc="Processing batches"):
         
         # Compute reward for all batch items
-        compute_rewards(reward_model, batch["A"], accelerator)
-        compute_rewards(reward_model, batch["B"], accelerator)
+        reward_A = compute_rewards(reward_model, batch["A"], accelerator)
+        reward_B = compute_rewards(reward_model, batch["B"], accelerator)
 
         # final_scores.extend(scores.cpu().tolist())
     
