@@ -264,9 +264,13 @@ def compute_rewards(reward_model, batch, accelerator):
         )
         
     # We're getting the logits from the output and then squeezing to get a single reward scalar for each batch item
+    
     print("OUTPUT SHAPE:", output.logits.shape)
     
     reward_scalar = output.logits.squeeze(-1)
+    
+    print("Output shape should be [BATCH_SIZE]:", output.logits.shape)
+
     
     return reward_scalar
 
