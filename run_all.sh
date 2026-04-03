@@ -2,8 +2,10 @@
 
 # This script runs all the steps: creating the dataset, training the reward model, training the policy model with GRPO, creating figures, and then running the tests.
 NUM_GPUS=$(nvidia-smi --list-gpus | wc -l)
+
 # Qwen/Qwen2-0.5B
 MODEL="$1"
+
 # 10000
 TRAINING_SIZE="$2"
 
