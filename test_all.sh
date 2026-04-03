@@ -1,7 +1,7 @@
 #!/bin/bash
 
 NUM_GPUS=$(nvidia-smi --list-gpus | wc -l)
-MODEL="Qwen/Qwen2-0.5B"
+MODEL="$1"
 
 echo "Beginning to test with $NUM_GPUS GPUs"
 
