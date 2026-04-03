@@ -14,6 +14,5 @@ echo "training the policy model with the reward model"
 accelerate launch --multi_gpu --num_processes $NUM_GPUS accelerate_rlaif/training_grpo_with_reward_model.py dataset.json models/final_reward_model Qwen/Qwen2-0.5B models/grpo_checkpoints models/grpo_model_constitution_FINAL
 
 echo "------------------------------------"
-echo "training figures"
-# TODO: create and save training logs to the same folder
-python accelerate_rlaif/create_figures.py grpo_training_log.json reward_model_training_log.json figures
+echo "creating figures"
+python accelerate_rlaif/create_figures.py models/grpo_checkpoints/grpo_training_log.json models/reward_model_constitution_checkpoints/training_reward_log.json figures

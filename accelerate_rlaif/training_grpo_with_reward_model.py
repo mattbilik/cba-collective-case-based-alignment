@@ -145,7 +145,7 @@ def train_with_grpo(dataset: Dataset,
         grpo_log = grpo_trainer.state.log_history
         
         # Save the GRPO log
-        log_path = os.path.join(output_directory, "grpo_log.json")
+        log_path = os.path.join(output_directory, "grpo_training_log.json")
         with open(log_path, "w") as log_file:
             json.dump(grpo_log, log_file, indent=4)
                 

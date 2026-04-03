@@ -29,6 +29,13 @@ From: nvidia/cuda:12.2.2-base-ubuntu22.04
     echo "===== [PIP] Installing additional requirements ====="
     /opt/conda/envs/ccai/bin/pip install -r /reqs/requirements.txt
 
+    echo "===== [AI EVAL HARNESS] Installing eval harness ====="
+    git clone --depth 1 https://github.com/EleutherAI/lm-evaluation-harness
+    cd lm-evaluation-harness
+    /opt/conda/envs/ccai/bin/pip install -e .
+    /opt/conda/envs/ccai/bin/pip install "lm_eval[hf]"
+    cd ..
+
     echo "===== [CLEANUP] Cleaning caches ====="
     conda clean -afy
     rm -rf /opt/conda/pkgs/*/*/tests

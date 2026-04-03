@@ -82,7 +82,7 @@ def train_reward_model(dataset: Dataset,
         reward_log = reward_model_trainer.state.log_history
         
         # Save the reward log
-        log_path = os.path.join(output_directory, "reward_log.json")
+        log_path = os.path.join(output_directory, "training_reward_log.json")
         with open(log_path, "w") as log_file:
             json.dump(reward_log, log_file, indent=4)
 
