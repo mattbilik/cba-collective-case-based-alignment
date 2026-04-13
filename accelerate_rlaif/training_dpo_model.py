@@ -2,8 +2,8 @@ import torch
 import sys
 from peft import LoraConfig, TaskType
 from transformers import AutoModelForSequenceClassification, AutoTokenizer, PretrainedConfig, BitsAndBytesConfig
-from trl import GRPOTrainer, GRPOConfig
-from generate_grpo_dataset import RewardDataset
+from trl import DPOTrainer, DPOConfig
+from generate_dpo_dataset import DPODataset
 from datasets import Dataset
 import matplotlib.pyplot as plt
 
@@ -21,17 +21,8 @@ import json
     - Also ask model to generate a score for each response 
         (i.e. a proportion that captures alignment to constitutional principles)
 2. Use pairs and scores (proportions) to train reward model (Qwen, although we can change this).
-3. GPPO SFT'd model with RLAIF model as reward model.
+3. DPO SFT'd model with RLAIF model as reward model.
 """
-
-BASE_MODEL = "Qwen/Qwen2-0.5B"
-
-# Final GRPO model name
-FINAL_MODEL_NAME = "/models/grpo_model_constitution_FINAL"
-OUTPUT_DIR = "./grpo_model_constitution_checkpoints"
-REWARD_MODEL_PATH = "models/final_reward_model"
-
-GRPO_MODEL_BATCH_SIZE = 16
 
 # Log every X updates steps
 logging_steps = 5
@@ -58,39 +49,16 @@ bnb_config = BitsAndBytesConfig(
     bnb_4bit_use_double_quant=use_nested_quant,
 )
 
-def train_with_grpo(dataset: Dataset,
-                    accelerator: Accelerator,
-                    grpo_model_path_or_name: str,
-                    reward_model_path_or_name: str = REWARD_MODEL_PATH,
-                    model_path_or_name: str = BASE_MODEL, 
-                    output_directory: str = OUTPUT_DIR):
+def train_with_dpo(dataset: Dataset,
+                   accelerator: Accelerator,
+                   input_model_path_or_name: str,
+                   output_model_path: str, 
+                   log_directory: str,
+                   batch_size: int = 2):
     
-    final_model_path = os.path.abspath(grpo_model_path_or_name)
+    final_model_path = os.path.abspath(output_model_path)
     print("Final model will be saved to:", final_model_path)
     
-    # with accelerator.main_process_first():
-    reward_model = AutoModelForSequenceClassification.from_pretrained(
-        reward_model_path_or_name)
-    
-    reward_tokenizer = AutoTokenizer.from_pretrained(
-        model_path_or_name,
-        trust_remote_code=True
-    )
-        
-    if reward_tokenizer.pad_token is None:
-        reward_tokenizer.pad_token = reward_tokenizer.eos_token
-        
-    if isinstance(reward_model.config, dict):
-            reward_model.config = PretrainedConfig.from_dict(reward_model.config)
-        
-    for param in reward_model.parameters():
-        param.requires_grad = False
-        
-    reward_model = accelerator.prepare(reward_model)
-    
-    # Ensure it has a pad_token
-    reward_model.eval()
-
     peft_config = LoraConfig(
         task_type=TaskType.CAUSAL_LM,
         inference_mode=False,
@@ -99,16 +67,15 @@ def train_with_grpo(dataset: Dataset,
         lora_dropout=0.1,
     )
 
-    grpo_config = GRPOConfig(
-        output_dir=output_directory,
-        per_device_train_batch_size=GRPO_MODEL_BATCH_SIZE,
+    dpo_config = DPOConfig(
+        output_dir=log_directory,
+        per_device_train_batch_size=batch_size,
         gradient_accumulation_steps=8,
         num_train_epochs=8,
         fp16=True,
         bf16=False,
         save_strategy="no",
-        max_completion_length = 512,        
-        max_prompt_length = 512,
+        max_length = 512,        
         logging_steps = logging_steps,
 
         # BROKEN BUT FIX! RuntimeError: expected scalar type Float but found Half
@@ -125,40 +92,36 @@ def train_with_grpo(dataset: Dataset,
         report_to="tensorboard"
     )
 
-    grpo_trainer = GRPOTrainer(
-        model=model_path_or_name,
-        args=grpo_config,
+    dpo_trainer = DPOTrainer(
+        model=input_model_path_or_name,
+        args=dpo_config,
         train_dataset=dataset.to_hf(),
-        reward_funcs=reward_model,
-        peft_config=peft_config,
-        
-        # NOTE: setting the processing class here to use the reward tokenizer
-        processing_class=reward_tokenizer,
+        peft_config=peft_config, # NOTE: setting the processing class here to use the reward tokenizer
     )
     
     # grpo_trainer.model.quantization_config = bnb_config
         
-    grpo_trainer.train()
+    dpo_trainer.train()
     accelerator.wait_for_everyone()
     
     if accelerator.is_local_main_process: 
     
-        grpo_log = grpo_trainer.state.log_history
+        dpo_log = dpo_trainer.state.log_history
         
         # Save the GRPO log
-        log_path = os.path.join(output_directory, "grpo_training_log.json")
+        log_path = os.path.join(log_directory, "dpo_training_log.json")
         with open(log_path, "w") as log_file:
-            json.dump(grpo_log, log_file, indent=4)
+            json.dump(dpo_log, log_file, indent=4)
                 
-    final_model = accelerator.unwrap_model(grpo_trainer.model)
+    final_model = accelerator.unwrap_model(dpo_trainer.model)
     final_model = final_model.merge_and_unload()
     
     if accelerator.is_local_main_process: 
         # Save the final reward model
-        print("Saving final model to:", final_model_path)
+        print("Saving final model to:", output_model_path)
 
-        final_model.save_pretrained(final_model_path)
-        grpo_trainer.tokenizer.save_pretrained(final_model_path)
+        final_model.save_pretrained(output_model_path)
+        dpo_trainer.tokenizer.save_pretrained(output_model_path)
 
 if __name__ == '__main__':
 
@@ -167,24 +130,23 @@ if __name__ == '__main__':
     if accelerator.is_local_main_process:
         start_time = time.time()
         data_parallel_degree = torch.cuda.device_count()
-        
         print(f"Detected {data_parallel_degree} GPUs: {[torch.cuda.get_device_name(i) for i in range(data_parallel_degree)]}")
 
-    dataset_path = sys.argv[1] 
-    reward_model_path_or_name = sys.argv[2]
-    model_path_or_name = sys.argv[3]    
-    output_directory = sys.argv[4]    
-    grpo_model_path_or_name = sys.argv[5]
-    
-    dataset = RewardDataset([],[],[],[])
+    dataset_path = sys.argv[1]
+    input_model_path_or_name = sys.argv[2]    
+    output_directory = sys.argv[3]    
+    output_model_path = sys.argv[4]
+    batch_size = int(sys.argv[5])
+
+    dataset = DPODataset([],[],[])
     dataset.load(dataset_path)
     
-    train_with_grpo(dataset,
-                    accelerator,
-                    grpo_model_path_or_name,
-                    reward_model_path_or_name,
-                    model_path_or_name,
-                    output_directory)
-        
+    train_with_dpo(dataset,
+                   accelerator,
+                   input_model_path_or_name,
+                   output_model_path,
+                   output_directory,
+                   batch_size)
+
     if accelerator.is_local_main_process:
         print(f"Time difference: {(time.time() - start_time) / 60} minutes")

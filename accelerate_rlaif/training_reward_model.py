@@ -7,7 +7,7 @@ from peft import LoraConfig, TaskType
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
 from trl import RewardTrainer, RewardConfig
 from datasets import Dataset
-
+from generate_grpo_dataset import RewardDataset
 import time
 import os
 from helpers.load_data_funcs import load_dataset_from_path
@@ -70,7 +70,7 @@ def train_reward_model(dataset: Dataset,
     reward_model_trainer = RewardTrainer(
         model=model,
         args=training_args,
-        train_dataset=dataset,
+        train_dataset=dataset.to_hf(),
         peft_config=peft_config,
     )
     
@@ -112,9 +112,9 @@ if __name__ == '__main__':
     dataset_path = sys.argv[1]
     reward_model_path = sys.argv[2]
     model_path_or_name = sys.argv[3]
-            
-    with accelerator.main_process_first():
-        dataset = load_dataset_from_path(dataset_path)
+    logging_dir = sys.argv[4]
+    dataset = RewardDataset([],[],[],[])
+    dataset.load(dataset_path)
 
     train_reward_model(dataset,
                        accelerator, 

@@ -2,7 +2,7 @@ import os
 import json
 import random
 import sys
-from hh_preferences.preference_datasets import get_pytorch_iterator, get_collate_fn
+from hh_preferences.preference_datasets import get_pytorch_iterator, get_collate_fn, CAIBasePairDataset
 from hh_preferences.utils import prompt_from_hh_anthropic
 from helpers.load_data_funcs import load_dataset_from_path
 from accelerate import Accelerator
@@ -44,9 +44,12 @@ if __name__ == "__main__":
     baseline_model_path_or_name = sys.argv[2]
     judge_model_path_or_name = sys.argv[3]
     constitution_path = sys.argv[4]
-    dataset_name = sys.argv[5]
+    dataset_path = sys.argv[5]
+    batch_size=sys.argv[6]
     accelerator = Accelerator()
-    batch_size=32
+    
+    dataset = CAIBasePairDataset()
+    dataset.load(dataset_path)
     
     with open(constitution_path) as f:
         constitution = json.load(f)
@@ -75,25 +78,14 @@ if __name__ == "__main__":
                     torch_dtype=compute_dtype,
                     quantization_config=bnb_config,
                 )
-
-
-        prompt_iterator = get_pytorch_iterator([dataset_name], 
-                                            tokenizer=tokenizer, 
-                                            split='test', 
-                                            batch_size=batch_size, 
-                                            sft_mode=False,
-                                            seed=0, 
-                                            cache_dir=os.getenv("PROJECT_CACHE", "~/.cache"), 
-                                            shuffle=False,
-                                            max_prompt_length=256, 
-                                            max_length=512,
-                                            num_turns=1, 
-                                            data_fraction=1, 
-                                            prefs_path=None, 
-                                            sampled_data_dir=None,
-                                        )
+    raw_prompts = [elem["prompt"] for elem in dataset]
+    prompt_iterator = get_pytorch_iterator(dataset=dataset,
+                                            tokenizer = tokenizer,
+                                            tokenize_fields = ["prompt"],
+                                            batch_size = batch_size,
+                    )
             
-    judgments = generate_responses_and_judgments(trained_model, baseline_model, judge_model, accelerator, tokenizer, constitution, prompt_iterator, batch_size=batch_size)
+    judgments = generate_responses_and_judgments(trained_model, baseline_model, judge_model, accelerator, tokenizer, constitution, prompt_iterator, raw_prompts, batch_size=batch_size)
     if accelerator.is_main_process:
         #shooould be win rate?
         print("Win rate", (judgments["judgments"] > 0.5).sum() / judgments["judgments"].shape[0])

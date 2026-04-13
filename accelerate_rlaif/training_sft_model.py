@@ -18,7 +18,7 @@ import json
 import os
 import time
 from accelerate import Accelerator
-from helpers.load_data_funcs import load_dataset_from_path
+from generate_sft_dataset import SFTDataset
 import sys
 import matplotlib.pyplot as plt
 
@@ -75,10 +75,6 @@ lora_config = LoraConfig(
 
 num_train_epochs = 3
 
-# Enable fp16/bf16 training (set bf16 to True with an A100)
-fp16 = False
-bf16 = False
-
 # # Batch size per GPU for training
 # per_device_train_batch_size = 4
 
@@ -122,43 +118,6 @@ save_steps = 25
 # Log every X updates steps
 logging_steps = 5
 
-# --------------- Load and Prepare Dataset -----------------
-
-# Load alignment dataset from JSON file
-# json_path = "~/.cache/hh_data/hh_anthropic_1turn_df1.0_ff1_gpt4_completions.json"
-
-# with open(json_path) as f:
-#     raw_data = json.load(f)
-
-# # Flatten into a list of dicts
-# rows = []
-# for prompt, completions in raw_data.items():
-#     final_completion = completions[0]
-#     rows.append({"prompt": prompt, "final_completion": final_completion})
-
-# dataset = Dataset.from_list(rows)
-
-# --------------- Fine-Tuning with PEFT -----------------
-# def tokenize(batch, model_name=MODEL_NAME):
-#     tokenizer = AutoTokenizer.from_pretrained(model_name)
-#     tokenizer.pad_token = tokenizer.eos_token
-#     tokenizer.padding_side = "right" # Fix weird overflow issue with fp16 training
-    
-#     combined = [p + "\n" + c for p, c in zip(batch["prompt"], batch["final_completion"])]
-#     tokenized = tokenizer(
-#         combined,
-#         truncation=True,
-#         padding="max_length",
-#         max_length=512,
-#     )
-    
-#     # Model is fine-tuned (via "labels") to produce the input sequence (prompt and final completion)
-#     tokenized["labels"] = tokenized["input_ids"].copy()
-#     return tokenized
-
-# def create_tokenized_dataset():
-#     return dataset.map(tokenize, batched=True, remove_columns=dataset.column_names)
-
 def finetune_sft(accelerator: Accelerator,
                  dataset: Dataset,
                  model_name: str = MODEL_NAME,
@@ -173,7 +132,7 @@ def finetune_sft(accelerator: Accelerator,
     )
     
     model = prepare_model_for_kbit_training(model)
-    
+    dataset = dataset.to_hf()
     # training_arguments = TrainingArguments(
     #     output_dir=output_dir,
     #     num_train_epochs=num_train_epochs,
@@ -267,7 +226,8 @@ if __name__ == "__main__":
     dataset_path = sys.argv[2] 
     final_model_path = sys.argv[3]
 
-    dataset = load_dataset_from_path(dataset_path)
+    dataset = SFTDataset([],[],[])
+    dataset.load(dataset_path)
 
     finetune_sft(accelerator,
                  dataset,

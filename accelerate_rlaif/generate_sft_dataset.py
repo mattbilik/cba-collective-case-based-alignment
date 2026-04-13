@@ -2,14 +2,14 @@ import os
 import json
 import random
 import sys
-import time
-from hh_preferences.preference_datasets import get_pytorch_iterator
+from hh_preferences.preference_datasets import get_pytorch_iterator, CAIPipelineDataset, CAIBasePairDataset, transform_and_write_base_dataset
+from torch.utils.data import DataLoader
 from hh_preferences.utils import prompt_from_hh_anthropic
 from accelerate import Accelerator
 from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
 from sentence_transformers import SentenceTransformer
 import torch
-import torch.distributed as dist
+from datasets import Dataset
 
 from helpers.model_funcs import get_completions
 from helpers.accelerate_funcs import gather_iterator_batches
@@ -39,37 +39,31 @@ bnb_config = BitsAndBytesConfig(
     bnb_4bit_use_double_quant=use_nested_quant,
 )
 
-# def get_completion(input_ids,
-#                     attention_mask,
-#                     model,
-#                     accelerator,
-#                     tokenizer,
-#                     max_new_tokens=200):
-        
-#     input_ids.to(accelerator.device)
-#     prompt_lengths = attention_mask.sum(dim=1)
+class SFTDataset(CAIPipelineDataset):
+    def __init__(self, prompts, initials, revisions):
+        self.entries = []
+        for i in range(0, len(prompts)):
+            self.entries.append({
+                "prompt": prompts[i],
+                "initial": initials[i],
+                "completion": revisions[i]
+            })
     
-#     with torch.inference_mode():    
-#         output = model.generate(
-#              input_ids,
-#              max_new_tokens=max_new_tokens,
-#              do_sample=True,
-#              temperature=1.0,
-#              pad_token_id=tokenizer.pad_token_id or tokenizer.eos_token_id
-#         )
-        
-#     responses = []
-    
-#     for i, length in enumerate(prompt_lengths):
-#         response = output[i][length:]
-#         responses.append(response)
-    
-#     responses = pad_sequence(responses, batch_first=True, 
-#                              padding_value=tokenizer.pad_token_id)
-    
-#     responses = tokenizer.decode(responses)
-            
-#     return responses
+    def __len__(self):
+        return len(self.entries)
+
+    def __getitem__(self, idx):
+        return self.entries[idx]
+
+    def dump(self, path):
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump(self.entries, f, ensure_ascii=False, indent=4)
+    def load(self, path):
+        with open(path, 'r', encoding='utf-8') as f:
+            self.entries = json.load(f)
+    def to_hf(self):
+        return Dataset.from_list(self.entries)
+
 
 def get_all_turns_and_format(dialogue: str) -> list[str, str]:
     
@@ -166,7 +160,7 @@ def revise_responses_on_constitution(batch_prompts,
                                      tokenizer,
                                      accelerator,
                                      constitution,
-                                     number_of_revisions=4) -> str:
+                                     number_of_revisions=1) -> str:
     """
     Revises a given harmfulness_prompt response according to the constitutional principles.
     Args:
@@ -188,9 +182,6 @@ def revise_responses_on_constitution(batch_prompts,
     input_ids = tokenized_batch_prompts['input_ids']
     attention_mask = tokenized_batch_prompts['attention_mask']
     
-    # INITIAL COMPLETIONS
-    print("Generating initial completions for the batch of prompts:\n")
-    
     initial_completions = get_completions(
         input_ids, attention_mask, model, accelerator, tokenizer
     )
@@ -208,21 +199,9 @@ def revise_responses_on_constitution(batch_prompts,
     Assistant: ... initial completion
             
     """
-    
-    print("Generating revisions for the batch of prompts:\n")
         
     # NOTE: this is doing revisions
     for _ in range(number_of_revisions):      
-                                  
-        # Add the new prompt to the conversation history
-        # harmfulness_prompt_history.append({
-        #     'role': 'user',
-        #     'content': revision_prompt
-        # })
-            
-        # revision_prompt = [
-        #     {'role': 'user', 'content': revision_prompt}
-        # ]
         
         tokenized_revision_prompt = tokenize_revision_request(batch_prompts, 
                                                             random_principle, 
@@ -242,74 +221,55 @@ def revise_responses_on_constitution(batch_prompts,
            
         responses_to_revise = revised_responses
             
-    return responses_to_revise
+    return initial_completions, responses_to_revise
 
 def run_generation(prompt_iterator, tokenizer, model, accelerator, constitution):
-    
-    responses = []
+    prompts = []
+    initials = []
+    reviseds = []
     prompt_idx = 0
 
-    # batch number (e.g. 4) batch items per batch
     for batch in tqdm(prompt_iterator, desc="Processing batches"):
         prompt_idx += 1
         print(f' Processing batch: {prompt_idx}')
         print(f'prompt_idx: {prompt_idx}')
-        
-        start_time = time.time()
-        
-        final_completion = revise_responses_on_constitution(batch,
-            model, tokenizer, accelerator, constitution, number_of_revisions=4)
-        
-        end_time = time.time()
-        elapsed_time = end_time - start_time
-        print(f"Time taken for batch {prompt_idx}: {elapsed_time:.2f} seconds")
+        initials, revised = revise_responses_on_constitution(batch,
+            model, tokenizer, accelerator, constitution, number_of_revisions=1)
         
         # final_completion = accelerator.gather_for_metrics(final_completion)
+        prompts.extend(batch["prompt"])
+        initials.extend(initials)
+        reviseds.extend(revised)
         
-        # Append each completion with its corresponding prompt
-        for i, completion in enumerate(final_completion):
-            responses.append({
-                "prompt": batch["prompt"][i],
-                "completion": completion
-            })
-        
-    # print(f"Responses before gathering: {responses}")
-    responses = gather_iterator_batches(responses,
+    prompts = gather_iterator_batches(prompts,
                                         accelerator,
-                                        prompt_iterator)    
-    
-    return responses
+                                        prompt_iterator)
+    initials = gather_iterator_batches(initials,
+                                        accelerator,
+                                        prompt_iterator)
+    reviseds = gather_iterator_batches(reviseds,
+                                        accelerator,
+                                        prompt_iterator)
 
-def dump_files(responses, base_output_dir):
-    with open(os.path.join(base_output_dir, f'hh_anthropic_1turn_df_completions_many.json'), 'w+') as f:
-        json.dump(responses, f, indent=2)
-    print('Saved to file')
 
-def create_revisions(model_name: str = 'Qwen/Qwen2-7B',
-                     constitution: dict = None,
-                     accelerator: Accelerator = None,
-                     num_completions: int = 100):
+    return prompts, initials, reviseds
+
+def create_sft_dataset(model: AutoModelForCausalLM,
+                     tokenizer: AutoTokenizer,
+                     base_pair_dataset: CAIBasePairDataset,
+                     constitution: dict,
+                     accelerator: Accelerator,
+                     batch_size: int,
+                     num_completions: int
+                     ) -> SFTDataset:
     
-    #need to expand this out into different sections?
-    
-    args = {
-        # This magic number is from the Anthropic CAI paper
-        # "num_completions": 182831,
-        "num_completions": num_completions,
-        "ai_model": f"{model_name}",
-        "base_output_dir": f"{os.getenv('PROJECT_CACHE', '~/.cache')}/hh_data",
-        "cache_dir": os.getenv("PROJECT_CACHE", "~/.cache"),
-        "data_fraction": 1.0,
-        "ff": 1,
-        # "constitution": constitution_path,
-    }
 
     # Print the current working directory
     with accelerator.main_process_first():
         print("Current working directory:", os.getcwd())
         
         # Limit number of completions if specified
-        if args["num_completions"] <= 0:
+        if num_completions <= 0:
             raise ValueError(
                 'num_completions must be positive integer that is greater than 0')
 
@@ -326,70 +286,34 @@ def create_revisions(model_name: str = 'Qwen/Qwen2-7B',
                     
         elif CASE_REGIME == "constitution":
             print("Using CONSTITUTION-based revision regime.") 
-                
-    # Use Qwen for tokenizing prompts from Anthropic helpfulness dataset Qwen/Qwen2-7B
-    # tokenizer = AutoTokenizer.from_pretrained(
-    #     'Qwen/Qwen2-1.5B')
-    
-        tokenizer = AutoTokenizer.from_pretrained(model_name,
-                                                  padding_side='left')
-        tokenizer.pad_token_id = tokenizer.eos_token_id
-        model = AutoModelForCausalLM.from_pretrained(
-                    model_name,
-                    dtype=compute_dtype,
-                    quantization_config=bnb_config,
-                )
-        
-        prompt_iterator = get_pytorch_iterator(['hh'],
-                                             tokenizer=tokenizer,
-                                             split='train',
-                                             batch_size=4,
-                                             sft_mode=True,
-                                             seed=0,
-                                             n_epochs=1,
-                                             n_examples=args["num_completions"],
-                                             fast_forward = args["ff"],
-                                             cache_dir=args["cache_dir"],
-                                             shuffle=False, # doesn't matter, as we use complete prompt for GPT-4/Claude
-                                             max_prompt_length=256,
-                                             max_length=512,
-                                             num_turns=1,
-                                             data_fraction=args["data_fraction"],
-                                             prefs_path=None,
-                                             sampled_data_dir=None,
-                                             text_preprocessing_func = prompt_from_hh_anthropic,
-                                             num_examples = args["num_completions"],
-        )
-        
+
+    prompt_iterator = get_pytorch_iterator(base_pair_dataset,
+                         tokenizer = None,
+                         batch_size = batch_size,
+                         shuffle = False,
+                         max_response_length = 1024,
+                         max_prompt_length = 512,
+                         num_examples = num_completions
+                      )
+
     # We are preparing the model and the iterator here for
-    model, prompt_iterator = accelerator.prepare(model, prompt_iterator)
-    
+    model, prompt_iterator = accelerator.prepare(model, prompt_iterator)    
     accelerator.wait_for_everyone()
-
     # NOTE: these are the final responses
-    final_responses = run_generation(prompt_iterator, tokenizer, model, accelerator, constitution)     
-    
-    # dump_files(final_responses, args['base_output_dir'])
-    
-    accelerator.wait_for_everyone()
-
-    return final_responses
-
-    # if accelerator.is_local_main_process:
-    #     dump_files(final_responses, args['base_output_dir'])
-    
+    prompts, initials, revisions = run_generation(prompt_iterator, tokenizer, model, accelerator, constitution)     
+    if accelerator.is_main_process:
+        sft_dataset = SFTDataset(prompts, initials, revisions)
+        return sft_dataset        
 if __name__ == "__main__":
     
     model_name = sys.argv[1]
     constitution_path = sys.argv[2]
     num_completions = int(sys.argv[3])
-    sft_dataset_path = sys.argv[4]
+    batch_size = int(sys.argv[4])
+    input_dataset_path = sys.argv[5]
+    output_dataset_path = sys.argv[6]
     
     accelerator = Accelerator()
-
-    if accelerator.is_local_main_process:
-        start_time = time.time()
-        data_parallel_degree = torch.cuda.device_count()
     
     with accelerator.main_process_first():
         constitution_folder = os.path.join(os.path.dirname(__file__), 'constitutions')
@@ -398,26 +322,25 @@ if __name__ == "__main__":
 
         with open(constitution_file_path, 'r') as f:
             constitution = json.load(f)
-        
 
-    dataset = create_revisions(model_name, 
-                     constitution,
-                     accelerator,
-                     num_completions)
-    
-    if accelerator.is_local_main_process:
-        print(dataset)
-        
-        # Add to the datasets folder
-        dataset_folder = os.path.join(os.path.dirname(__file__), 'local_datasets')
-        os.makedirs(dataset_folder, exist_ok=True)
-        
-        file_path = os.path.join(dataset_folder, sft_dataset_path)
+        tokenizer = AutoTokenizer.from_pretrained(model_name,
+                                                  padding_side='left')
+        tokenizer.pad_token_id = tokenizer.eos_token_id
+        model = AutoModelForCausalLM.from_pretrained(
+                    model_name,
+                    dtype=compute_dtype,
+                    quantization_config=bnb_config,
+                )
 
-        with open(file_path, 'w', encoding='utf-8') as f:
-            json.dump(dataset, f, indent=4)
-            
-        print(f"Time difference: {(time.time() - start_time) / 60} minutes")
-
-        if dist.is_initialized():
-            dist.destroy_process_group()
+    transform_and_write_base_dataset(input_dataset_path,
+                                     output_dataset_path,
+                                     lambda dataset: create_sft_dataset(model,
+                                                                        tokenizer,
+                                                                        dataset,
+                                                                        constitution,
+                                                                        accelerator,
+                                                                        batch_size,
+                                                                        num_completions
+                                                                        ),
+                                     accelerator
+                                    )
