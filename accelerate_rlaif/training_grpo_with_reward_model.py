@@ -107,7 +107,7 @@ def train_with_grpo(dataset: Dataset,
         bf16=False,
         save_strategy="no",
         max_completion_length = 512,        
-        max_prompt_length = 512,
+        max_prompt_length = 1024,
         logging_steps = logging_steps,
 
         # BROKEN BUT FIX! RuntimeError: expected scalar type Float but found Half

@@ -71,12 +71,12 @@ class RewardDataset(torch.utils.data.Dataset):
             "prompt": prompt,
             "chosen": chosen,
             "rejected": rejected,
-            "margin": margin.item()
+            
+            # Taking the abosolute value of the margin so that it's always in the direction of the chosen response
+            "margin": abs(margin.item())
         }
     def __len__(self):
         return len(self.prompts)
-    
-
 
 if __name__ == '__main__':
     

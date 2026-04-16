@@ -20,7 +20,7 @@ BASE_MODEL = "Qwen/Qwen2-0.5B"
 OUTPUT_DIR = "./reward_model_constitution_checkpoints"
 REWARD_MODEL_PATH = "final_reward_model"
 
-REWARD_MODEL_BATCH_SIZE = 16
+REWARD_MODEL_BATCH_SIZE = 8
 
 # Log every X updates steps
 logging_steps = 5
@@ -56,7 +56,7 @@ def train_reward_model(dataset: Dataset,
     
     training_args = RewardConfig(
         output_dir=output_directory,
-        num_train_epochs=20,
+        num_train_epochs=5,
         per_device_train_batch_size=REWARD_MODEL_BATCH_SIZE,
         learning_rate=2e-5,
         logging_steps=logging_steps,
