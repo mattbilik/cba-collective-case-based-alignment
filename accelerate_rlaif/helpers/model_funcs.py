@@ -63,8 +63,10 @@ def get_completions(input_ids,
             
     print(f"Model device: {model.device}\nInput device {input_ids.device}")
     
+    unwrapped_model = accelerator.unwrap_model(model)
+
     with torch.inference_mode():    
-        output = model.generate(
+        output = unwrapped_model.generate(
             input_ids,
             max_new_tokens=max_new_tokens,
             do_sample=True,

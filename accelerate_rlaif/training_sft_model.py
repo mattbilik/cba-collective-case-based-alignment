@@ -20,7 +20,7 @@ import time
 from accelerate import Accelerator
 from generate_sft_dataset import SFTDataset
 import sys
-import matplotlib.pyplot as plt
+import torch.distributed as dist
 
 os.environ["WANDB_DISABLED"] = "true"
 
@@ -190,21 +190,21 @@ def finetune_sft(accelerator: Accelerator,
             json.dump(sft_log, log_file, indent=4)
                 
         # # Extract training loss and steps
-        steps = [entry["step"] for entry in sft_log if "train_loss" in entry]
-        losses = [entry["train_loss"] for entry in sft_log if "train_loss" in entry]
+        # steps = [entry["step"] for entry in sft_log if "train_loss" in entry]
+        # losses = [entry["train_loss"] for entry in sft_log if "train_loss" in entry]
         
-        plt.figure(figsize=(10, 6))
-        plt.plot(steps, losses, label="Training Loss", marker="o")
-        plt.xlabel("Steps")
-        plt.ylabel("Loss")
-        plt.title("Training Loss Over Steps")
-        plt.legend()
-        plt.grid()
+        # plt.figure(figsize=(10, 6))
+        # plt.plot(steps, losses, label="Training Loss", marker="o")
+        # plt.xlabel("Steps")
+        # plt.ylabel("Loss")
+        # plt.title("Training Loss Over Steps")
+        # plt.legend()
+        # plt.grid()
         
-        # Save the figure
-        figure_path = "training_loss.png"
-        plt.savefig(figure_path)
-        plt.close()
+        # # Save the figure
+        # figure_path = "training_loss.png"
+        # plt.savefig(figure_path)
+        # plt.close()
         
     final_model = accelerator.unwrap_model(sft_trainer.model)
     final_model = final_model.merge_and_unload()
@@ -233,3 +233,8 @@ if __name__ == "__main__":
                  dataset,
                  model_name=model_path_or_name,
                  final_model_path=final_model_path)
+    
+    if accelerator.is_local_main_process:
+        print(f"Time difference: {(time.time() - start_time) / 60} minutes")
+        if dist.is_initialized():
+            dist.destroy_process_group()

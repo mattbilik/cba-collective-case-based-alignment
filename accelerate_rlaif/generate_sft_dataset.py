@@ -10,6 +10,7 @@ from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
 from sentence_transformers import SentenceTransformer
 import torch
 from datasets import Dataset
+import torch.distributed as dist
 
 from helpers.model_funcs import get_completions
 from helpers.accelerate_funcs import gather_iterator_batches
@@ -303,7 +304,8 @@ def create_sft_dataset(model: AutoModelForCausalLM,
     prompts, initials, revisions = run_generation(prompt_iterator, tokenizer, model, accelerator, constitution)     
     if accelerator.is_main_process:
         sft_dataset = SFTDataset(prompts, initials, revisions)
-        return sft_dataset        
+        return sft_dataset      
+      
 if __name__ == "__main__":
     
     model_name = sys.argv[1]
@@ -344,3 +346,6 @@ if __name__ == "__main__":
                                                                         ),
                                      accelerator
                                     )
+    if accelerator.is_local_main_process:
+        if dist.is_initialized():
+            dist.destroy_process_group()

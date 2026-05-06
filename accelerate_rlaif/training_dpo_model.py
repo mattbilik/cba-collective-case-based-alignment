@@ -5,7 +5,8 @@ from transformers import AutoModelForSequenceClassification, AutoTokenizer, Pret
 from trl import DPOTrainer, DPOConfig
 from generate_dpo_dataset import DPODataset
 from datasets import Dataset
-import matplotlib.pyplot as plt
+# import matplotlib.pyplot as plt
+import torch.distributed as dist
 
 import os
 
@@ -150,3 +151,5 @@ if __name__ == '__main__':
 
     if accelerator.is_local_main_process:
         print(f"Time difference: {(time.time() - start_time) / 60} minutes")
+        if dist.is_initialized():
+            dist.destroy_process_group()

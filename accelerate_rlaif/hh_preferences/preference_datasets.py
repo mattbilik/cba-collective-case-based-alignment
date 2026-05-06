@@ -2,17 +2,13 @@ import datasets
 import torch
 from torch.utils.data import default_collate
 from torch.utils.data import DataLoader
-from .utils import get_local_dir, TemporarilySeededRandom
 from torch.nn.utils.rnn import pad_sequence
-from collections import defaultdict
 from abc import ABC, abstractmethod
-import tqdm
-import random
-from bs4 import BeautifulSoup, NavigableString
-import numpy as np
-from typing import Dict, List, Optional, Iterator, Callable, Union, Tuple
+from typing import Dict, List, Optional, Callable, Union
 import json
 import os
+from accelerate import Accelerator
+from transformers import AutoTokenizer
 
 class CAIPipelineDataset(torch.utils.data.Dataset):
     @abstractmethod
@@ -24,7 +20,6 @@ class CAIPipelineDataset(torch.utils.data.Dataset):
     @abstractmethod
     def to_hf(self):
         pass
-
 
 class CAIBasePairDataset(CAIPipelineDataset):
     def __init__(self, hh_json):
@@ -131,12 +126,38 @@ def transform_and_write_base_dataset(old_path: str,
                       new_path: str,
                       cai_dataset_constructor: Callable[[CAIBasePairDataset], CAIPipelineDataset],
                       accelerator: Accelerator) -> CAIPipelineDataset:
+        
+    # Moving everything inside the main process -- was having issues with writing to the same file
+    
+    # This used to be .is_main_process
+
     old_dataset = CAIBasePairDataset([])
     old_dataset.load(old_path)
+    
+    print(f"Length of old dataset: {len(old_dataset)}")
+
     new_dataset = cai_dataset_constructor(old_dataset)
-    if accelerator.is_main_process:
+    
+    print(f"Length of new dataset: {len(new_dataset)}")
+
+    if accelerator.is_local_main_process:
+    
         new_dataset.dump(new_path)
         return new_dataset
+    
+    # if accelerator.is_local_main_process:
+    #     old_dataset = CAIBasePairDataset([])
+    #     old_dataset.load(old_path)
+        
+    #     print(f"Length of old dataset: {len(old_dataset)}")
+
+    #     new_dataset = cai_dataset_constructor(old_dataset)
+        
+    #     print(f"Length of new dataset: {len(new_dataset)}")
+
+    #     new_dataset.dump(new_path)
+    #     return new_dataset
+
 
 def get_pytorch_iterator(dataset: CAIPipelineDataset,
                          tokenizer: Optional[AutoTokenizer] = None,

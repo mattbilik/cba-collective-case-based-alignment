@@ -36,7 +36,10 @@ if __name__ == '__main__':
     #convert to CAIBasePairDataset obj -- perhaps get_dataset should return this directly?
     train_dataset = CAIBasePairDataset(train_dataset)
     test_dataset = CAIBasePairDataset(test_dataset)
-
-    #save to file
+    # Ensure the directories exist
+    os.makedirs(os.path.dirname(train_dataset_output_path), exist_ok=True)
+    os.makedirs(os.path.dirname(test_dataset_output_path), exist_ok=True)
+    
+    # Save to file
     train_dataset.dump(train_dataset_output_path)
     test_dataset.dump(test_dataset_output_path)
