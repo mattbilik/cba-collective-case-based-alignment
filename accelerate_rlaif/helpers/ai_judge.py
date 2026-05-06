@@ -109,7 +109,7 @@ def generate_test_responses(model: AutoModelForCausalLM,
                                            tokenizer
                                           )
         responses.extend(final_completion)
-    
+    accelerator.wait_for_everyone()
     responses = gather_iterator_batches(responses,
                                         accelerator,
                                         dataset)
@@ -179,6 +179,7 @@ def judge_outputs(judge_model, tokenizer, accelerator, judgment_case_iterator, b
         scores = score_batch(judge_model, accelerator, batch)
         final_scores.extend(scores.cpu().tolist())
     
+    accelerator.wait_for_everyone()
     final_scores = gather_iterator_batches(final_scores,
                                         accelerator,
                                         judgment_case_iterator)
@@ -287,7 +288,7 @@ def judge_outputs_reward(reward_model, accelerator, judgment_case_iterator):
         scores = torch.sigmoid(reward_A - reward_B)
         
         final_scores.extend(scores.cpu().tolist())
-    
+    accelerator.wait_for_everyone()
     final_scores = gather_iterator_batches(final_scores,
                                            accelerator,
                                            judgment_case_iterator)

@@ -234,14 +234,16 @@ def run_generation(prompt_iterator, tokenizer, model, accelerator, constitution)
         prompt_idx += 1
         print(f' Processing batch: {prompt_idx}')
         print(f'prompt_idx: {prompt_idx}')
-        initials, revised = revise_responses_on_constitution(batch,
+        initial, revised = revise_responses_on_constitution(batch,
             model, tokenizer, accelerator, constitution, number_of_revisions=1)
         
         # final_completion = accelerator.gather_for_metrics(final_completion)
         prompts.extend(batch["prompt"])
-        initials.extend(initials)
+        initials.extend(initial)
         reviseds.extend(revised)
-        
+    
+    accelerator.wait_for_everyone()
+
     prompts = gather_iterator_batches(prompts,
                                         accelerator,
                                         prompt_iterator)
