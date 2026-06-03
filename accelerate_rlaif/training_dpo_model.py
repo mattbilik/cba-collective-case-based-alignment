@@ -133,11 +133,16 @@ if __name__ == '__main__':
         data_parallel_degree = torch.cuda.device_count()
         print(f"Detected {data_parallel_degree} GPUs: {[torch.cuda.get_device_name(i) for i in range(data_parallel_degree)]}")
 
-    dataset_path = sys.argv[1]
-    input_model_path_or_name = sys.argv[2]    
-    output_directory = sys.argv[3]    
-    output_model_path = sys.argv[4]
-    batch_size = int(sys.argv[5])
+    config_file = sys.argv[1]
+    with open(config_file) as f:
+        config = json.load(f)
+    
+    aws = config["aws"]
+    dataset_path = config["dpo_dataset_train_file"]
+    input_model_path_or_name = config["dpo_input_model"]
+    output_directory = config["log_dir"]
+    output_model_path = config["dpo_model_path"]
+    batch_size = config["training_batch_size"]
 
     dataset = DPODataset([],[],[])
     dataset.load(dataset_path)

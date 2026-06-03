@@ -7,6 +7,8 @@ from abc import ABC, abstractmethod
 from typing import Dict, List, Optional, Callable, Union
 import json
 import os
+import boto3
+from botocore.client import BaseClient
 from accelerate import Accelerator
 from transformers import AutoTokenizer
 
@@ -125,12 +127,16 @@ def tokenize_batch_element(element: Dict, tokenize_fields: List[str], truncation
 def transform_and_write_base_dataset(old_path: str,
                       new_path: str,
                       cai_dataset_constructor: Callable[[CAIBasePairDataset], CAIPipelineDataset],
-                      accelerator: Accelerator) -> CAIPipelineDataset:
+                      accelerator: Accelerator,
+                      aws_client: Optional[BaseClient] = None,
+                      bucket: Optional[str] = None) -> CAIPipelineDataset:
         
     # Moving everything inside the main process -- was having issues with writing to the same file
     
     # This used to be .is_main_process
-
+    if accelerator.is_local_main_process:
+        if aws_client is not None:
+            aws_client.download_file(bucket, old_path, new_path)
     old_dataset = CAIBasePairDataset([])
     old_dataset.load(old_path)
     
@@ -143,6 +149,10 @@ def transform_and_write_base_dataset(old_path: str,
     if accelerator.is_local_main_process:
     
         new_dataset.dump(new_path)
+        if aws_client is not None:
+            aws_client.upload_file(new_path, bucket, new_path)
+
+            
         return new_dataset
     
     # if accelerator.is_local_main_process:

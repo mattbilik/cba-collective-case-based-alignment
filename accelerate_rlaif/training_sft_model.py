@@ -17,6 +17,7 @@ from datasets import Dataset
 import json
 import os
 import time
+import boto3
 from accelerate import Accelerator
 from generate_sft_dataset import SFTDataset
 import sys
@@ -222,11 +223,22 @@ if __name__ == "__main__":
         
         print(f"Detected {data_parallel_degree} GPUs: {[torch.cuda.get_device_name(i) for i in range(data_parallel_degree)]}")
 
-    model_path_or_name = sys.argv[1]
-    dataset_path = sys.argv[2] 
-    final_model_path = sys.argv[3]
+    config_file = sys.argv[1]
+    with open(config_file) as f:
+        config = json.load(f)
+    
+    aws = config["aws"]
+    if aws:
+        bucket = config["s3"]
+        s3_client = boto3.client('s3')
+
+    model_path_or_name = config["base_model"]
+    dataset_path = config["sft_dataset_train_path"]
+    final_model_path = config["sft_model_path"]
 
     dataset = SFTDataset([],[],[])
+    if aws:
+        aws_client.download_file(bucket, dataset_path, dataset_path)
     dataset.load(dataset_path)
 
     finetune_sft(accelerator,
@@ -234,6 +246,10 @@ if __name__ == "__main__":
                  model_name=model_path_or_name,
                  final_model_path=final_model_path)
     
+    if aws:
+        s3_client.upload_file(final_model_path, bucket, final_model_path)
+
+
     if accelerator.is_local_main_process:
         print(f"Time difference: {(time.time() - start_time) / 60} minutes")
         if dist.is_initialized():
