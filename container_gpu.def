@@ -55,4 +55,4 @@ From: nvidia/cuda:12.2.2-base-ubuntu22.04
 %runscript
     . /opt/conda/etc/profile.d/conda.sh
     conda activate ccai
-    exec python "$@"
+    exec bash "$@"
