@@ -54,7 +54,7 @@ def train_with_dpo(dataset: Dataset,
                    accelerator: Accelerator,
                    input_model_path_or_name: str,
                    output_model_path: str, 
-                   log_directory: str,
+                   checkpointing_directory: str,
                    batch_size: int = 2):
     
     final_model_path = os.path.abspath(output_model_path)
@@ -69,7 +69,7 @@ def train_with_dpo(dataset: Dataset,
     )
 
     dpo_config = DPOConfig(
-        output_dir=log_directory,
+        output_dir=checkpointing_directory,
         per_device_train_batch_size=batch_size,
         gradient_accumulation_steps=8,
         num_train_epochs=8,
@@ -110,7 +110,7 @@ def train_with_dpo(dataset: Dataset,
         dpo_log = dpo_trainer.state.log_history
         
         # Save the GRPO log
-        log_path = os.path.join(log_directory, "dpo_training_log.json")
+        log_path = os.path.join(checkpointing_directory, "dpo_training_log.json")
         with open(log_path, "w") as log_file:
             json.dump(dpo_log, log_file, indent=4)
                 
@@ -135,7 +135,9 @@ if __name__ == '__main__':
 
     dataset_path = sys.argv[1]
     input_model_path_or_name = sys.argv[2]    
-    output_directory = sys.argv[3]    
+    
+    checkpointing_directory = sys.argv[3]    
+    
     output_model_path = sys.argv[4]
     batch_size = int(sys.argv[5])
 
@@ -146,7 +148,7 @@ if __name__ == '__main__':
                    accelerator,
                    input_model_path_or_name,
                    output_model_path,
-                   output_directory,
+                   checkpointing_directory,
                    batch_size)
 
     if accelerator.is_local_main_process:
