@@ -10,18 +10,18 @@ accelerate launch --multi_gpu --num_processes $NUM_GPUS accelerate_rlaif/prepare
 echo "Beginning to train with $NUM_GPUS GPUs"
 echo "------------------------------------"
 echo "fine-tuning the helpful model with SFT"
-accelerate launch --multi_gpu --num_processes $NUM_GPUS accelerate_rlaif/generate_sft_dataset.py Qwen/Qwen3-0.6B accelerate_rlaif/constitutions/constitution_from_doc.json 2 8 datasets/base_train.json datasets/sft_train.json sft_train_checkpoint
-accelerate launch --multi_gpu --num_processes $NUM_GPUS accelerate_rlaif/generate_sft_dataset.py Qwen/Qwen3-0.6B accelerate_rlaif/constitutions/constitution_from_doc.json 2 8 datasets/base_test.json datasets/sft_test.json sft_test_checkpoint
+accelerate launch --multi_gpu --num_processes $NUM_GPUS accelerate_rlaif/generate_sft_dataset.py Qwen/Qwen3-0.6B accelerate_rlaif/constitutions/constitution_from_doc.json 2 8 datasets/base_train.json datasets/sft_train.json logs/sft_train_checkpoints/
+accelerate launch --multi_gpu --num_processes $NUM_GPUS accelerate_rlaif/generate_sft_dataset.py Qwen/Qwen3-0.6B accelerate_rlaif/constitutions/constitution_from_doc.json 2 8 datasets/base_test.json datasets/sft_test.json logs/sft_test_checkpoints/
 
 echo "------------------------------------"
 echo "training the SFT model on the generated dataset"
-accelerate launch --multi_gpu --num_processes $NUM_GPUS accelerate_rlaif/training_sft_model.py Qwen/Qwen3-0.6B datasets/sft_test.json models/sft_model
+accelerate launch --multi_gpu --num_processes $NUM_GPUS accelerate_rlaif/training_sft_model.py Qwen/Qwen3-0.6B datasets/sft_test.json models/sft_model logs/sft_training_checkpoints
 
 echo "------------------------------------"
 echo "doing RLAIF with DPO"
 accelerate launch --multi_gpu --num_processes $NUM_GPUS accelerate_rlaif/generate_dpo_dataset.py datasets/sft_train.json datasets/dpo_train.json
 accelerate launch --multi_gpu --num_processes $NUM_GPUS accelerate_rlaif/generate_dpo_dataset.py datasets/sft_test.json datasets/dpo_test.json
-accelerate launch --multi_gpu --num_processes $NUM_GPUS accelerate_rlaif/training_dpo_model.py datasets/dpo_train.json Qwen/Qwen3-0.6B logs/ models/dpo_model 8
+accelerate launch --multi_gpu --num_processes $NUM_GPUS accelerate_rlaif/training_dpo_model.py datasets/dpo_train.json Qwen/Qwen3-0.6B logs/dpo_training_checkpoints models/dpo_model 8
 
 #echo "------------------------------------"
 #echo "doing RLAIF with GRPO"
