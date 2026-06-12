@@ -303,7 +303,7 @@ def run_generation(prompt_iterator, tokenizer, model, accelerator, constitution,
         # print(f"Sample initial: {initials[:5]}")
         # print(f"Sample revision: {reviseds[:5]}")
 
-        return prompts, initials, reviseds
+    return prompts, initials, reviseds
 
 def create_sft_dataset(model: AutoModelForCausalLM,
                      tokenizer: AutoTokenizer,
