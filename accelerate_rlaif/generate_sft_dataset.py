@@ -237,7 +237,7 @@ def run_generation(prompt_iterator, tokenizer, model, accelerator, constitution,
     
     # Updating the iterator to resume from the last checkpoint
     iterator_checkpoint_path = os.path.join(checkpoint_dir, "sft_dataloader_state.pt")
-    data_checkpoint_path = os.path.json(checkpoint_dir, "sft_checkpoint.json")
+    data_checkpoint_path = os.path.join(checkpoint_dir, "sft_checkpoint.json")
     
     if os.path.exists(iterator_checkpoint_path) and os.path.exists(data_checkpoint_path):
         prompt_iterator.load(torch.load(iterator_checkpoint_path))
