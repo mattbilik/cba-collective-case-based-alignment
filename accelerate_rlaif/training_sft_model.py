@@ -212,7 +212,8 @@ def finetune_sft(accelerator: Accelerator,
 
     # Save trained model
     final_model.save_pretrained(final_model_path)
-        
+    tokenizer = sft_trainer.processing_class  # or however you have the tokenizer referenced
+    tokenizer.save_pretrained(final_model_path)    
 if __name__ == "__main__":
     
     accelerator = Accelerator()
@@ -233,12 +234,12 @@ if __name__ == "__main__":
         s3_client = boto3.client('s3')
 
     model_path_or_name = config["base_model"]
-    dataset_path = config["sft_dataset_train_path"]
+    dataset_path = config["sft_dataset_train_file"]
     final_model_path = config["sft_model_path"]
 
     dataset = SFTDataset([],[],[])
     if aws:
-        aws_client.download_file(bucket, dataset_path, dataset_path)
+        s3_client.download_file(bucket, dataset_path, dataset_path)
     dataset.load(dataset_path)
 
     finetune_sft(accelerator,
@@ -247,8 +248,12 @@ if __name__ == "__main__":
                  final_model_path=final_model_path)
     
     if aws:
-        s3_client.upload_file(final_model_path, bucket, final_model_path)
-
+        for root, dirs, files in os.walk(final_model_path):
+            for file in files:
+                local_path = os.path.join(root, file)
+                # Preserve folder structure as the S3 key
+                s3_key = os.path.relpath(local_path, start=os.path.dirname(final_model_path))
+                s3_client.upload_file(local_path, bucket, s3_key)
 
     if accelerator.is_local_main_process:
         print(f"Time difference: {(time.time() - start_time) / 60} minutes")

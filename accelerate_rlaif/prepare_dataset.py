@@ -25,12 +25,15 @@ if __name__ == '__main__':
         config = json.load(f)
     
     aws = config["aws"]
-    bucket = config["s3"]
+    if aws:
+        bucket = config["s3"]
+        s3_client = boto3.client('s3')
+
     dataset_name = config["base_dataset"]
     train_size = config["base_dataset_train_size"]
     test_size = config["base_dataset_test_size"]
-    train_dataset_output_path = config["base_dataset_train_size"]
-    test_dataset_output_path = config["base_dataset_test_size"]
+    train_dataset_output_path = config["base_dataset_train_file"]
+    test_dataset_output_path = config["base_dataset_test_file"]
 
     train_dataset = get_dataset(dataset_name, 'train')
     train_dataset = [(key, val) for key, val in train_dataset.items()]

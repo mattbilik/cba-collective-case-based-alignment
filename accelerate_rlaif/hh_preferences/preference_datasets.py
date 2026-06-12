@@ -194,7 +194,7 @@ def get_pytorch_iterator(dataset: CAIPipelineDataset,
     else:
         dataset = dataset[:num_examples]
     if num_examples is None:
-        num_examples = len(hf_dataset)
+        num_examples = len(dataset)
     # print(f"Dataset type: {type(hf_dataset)}")
     
     hf_dataset = datasets.Dataset.from_list(dataset)

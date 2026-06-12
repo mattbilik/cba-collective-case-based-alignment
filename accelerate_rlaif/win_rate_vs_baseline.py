@@ -60,7 +60,7 @@ if __name__ == "__main__":
     batch_size=config["inference_batch_size"]
     accelerator = Accelerator()
     
-    dataset = CAIBasePairDataset()
+    dataset = CAIBasePairDataset([])
     dataset.load(dataset_path)
     
     with open(constitution_path) as f:

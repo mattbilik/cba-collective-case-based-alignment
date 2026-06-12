@@ -326,11 +326,11 @@ if __name__ == "__main__":
     batch_size = config["inference_batch_size"]
     if mode == "train":
         num_completions = config["sft_dataset_train_size"]
-        output_dataset_path = config["sft_dataset_train_path"]
+        output_dataset_path = config["sft_dataset_train_file"]
         input_dataset_path = config["base_dataset_train_file"]
     else:
         num_completions = config["sft_dataset_test_size"]
-        output_dataset_path = config["sft_dataset_test_path"]
+        output_dataset_path = config["sft_dataset_test_file"]
         input_dataset_path = config["base_dataset_test_file"]
 
     
@@ -361,7 +361,7 @@ if __name__ == "__main__":
                                                                         num_completions
                                                                         ),
                                      accelerator,
-                                     aws,
+                                     s3_client,
                                      bucket
                                     )
     if accelerator.is_local_main_process:

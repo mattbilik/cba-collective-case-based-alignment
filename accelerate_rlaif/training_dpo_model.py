@@ -146,7 +146,7 @@ if __name__ == '__main__':
 
     dataset = DPODataset([],[],[])
     dataset.load(dataset_path)
-    
+
     train_with_dpo(dataset,
                    accelerator,
                    input_model_path_or_name,
