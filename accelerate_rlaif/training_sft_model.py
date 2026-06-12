@@ -120,10 +120,11 @@ logging_steps = 5
 
 def finetune_sft(accelerator: Accelerator,
                  dataset: Dataset,
+                 checkpoint_dir: str,
                  model_name: str = MODEL_NAME,
                  final_model_path: str = None):
         
-    output_dir=f"{model_name}-constitution-checkpoints"
+    # output_dir=f"{model_name}-constitution-checkpoints"
     
     model = AutoModelForCausalLM.from_pretrained(
         model_name,
@@ -155,7 +156,7 @@ def finetune_sft(accelerator: Accelerator,
     #     report_to="tensorboard"
     # )
     sft_config = SFTConfig(
-        output_dir=output_dir,
+        output_dir=checkpoint_dir,
         max_length=512,
         per_device_train_batch_size=1,
         gradient_accumulation_steps=8,
@@ -179,7 +180,7 @@ def finetune_sft(accelerator: Accelerator,
     # Train model
     
     # NOTE: if checkpoint, resume; otherwise train from scratch
-    sft_trainer.train(resume_from_checkpoint = output_dir)
+    sft_trainer.train(resume_from_checkpoint = checkpoint_dir)
     
     accelerator.wait_for_everyone()
 
@@ -228,12 +229,14 @@ if __name__ == "__main__":
     model_path_or_name = sys.argv[1]
     dataset_path = sys.argv[2] 
     final_model_path = sys.argv[3]
+    checkpoint_dir = sys.argv[4]
 
     dataset = SFTDataset([],[],[])
     dataset.load(dataset_path)
 
     finetune_sft(accelerator,
                  dataset,
+                 checkpoint_dir,
                  model_name=model_path_or_name,
                  final_model_path=final_model_path)
     
