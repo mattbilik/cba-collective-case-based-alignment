@@ -244,7 +244,12 @@ def run_generation(prompt_iterator, tokenizer, model, accelerator, constitution,
         
         with open(data_checkpoint_path, "rb") as f:
             checkpoint_data = json.load(f)
+            
             prompt_idx = checkpoint_data['index']
+            
+            prompts = checkpoint_data['prompts']
+            initials = checkpoint_data['initials']
+            reviseds = checkpoint_data['reviseds']
     
     # if not os.path.exists(iterator_checkpoint_path) or not os.path.exists(data_checkpoint_path):
     for batch in tqdm(prompt_iterator, desc="Processing batches"):
@@ -275,7 +280,7 @@ def run_generation(prompt_iterator, tokenizer, model, accelerator, constitution,
                     'initials': initials,
                     'reviseds': reviseds,
                     'index': prompt_idx
-                }, f)
+                }, f, ensure_ascii=False, indent=4)
         
         print(f"Accelerator device: {accelerator.device}, prompts length {len(prompts)}, initials length {len(initials)}, reviseds length {len(reviseds)}")
     
