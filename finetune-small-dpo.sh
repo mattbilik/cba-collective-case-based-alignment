@@ -10,8 +10,8 @@ accelerate launch --multi_gpu --num_processes $NUM_GPUS accelerate_rlaif/prepare
 echo "Beginning to train with $NUM_GPUS GPUs"
 echo "------------------------------------"
 echo "fine-tuning the helpful model with SFT"
-accelerate launch --multi_gpu --num_processes $NUM_GPUS accelerate_rlaif/generate_sft_dataset.py Qwen/Qwen3-0.6B accelerate_rlaif/constitutions/constitution_from_doc.json 2 8 datasets/base_train.json datasets/sft_train.json
-accelerate launch --multi_gpu --num_processes $NUM_GPUS accelerate_rlaif/generate_sft_dataset.py Qwen/Qwen3-0.6B accelerate_rlaif/constitutions/constitution_from_doc.json 2 8 datasets/base_test.json datasets/sft_test.json
+accelerate launch --multi_gpu --num_processes $NUM_GPUS accelerate_rlaif/generate_sft_dataset.py Qwen/Qwen3-0.6B accelerate_rlaif/constitutions/constitution_from_doc.json 2 8 datasets/base_train.json datasets/sft_train.json sft_train_checkpoint
+accelerate launch --multi_gpu --num_processes $NUM_GPUS accelerate_rlaif/generate_sft_dataset.py Qwen/Qwen3-0.6B accelerate_rlaif/constitutions/constitution_from_doc.json 2 8 datasets/base_test.json datasets/sft_test.json sft_test_checkpoint
 
 echo "------------------------------------"
 echo "training the SFT model on the generated dataset"

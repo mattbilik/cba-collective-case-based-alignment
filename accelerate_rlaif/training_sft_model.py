@@ -165,7 +165,7 @@ def finetune_sft(accelerator: Accelerator,
         report_to="tensorboard",
         ddp_find_unused_parameters=False,
         num_train_epochs=num_train_epochs,
-        logging_steps=logging_steps
+        logging_steps=logging_steps,
     )
     
     # TRL calls get_peft_model() automatically with peft_config
@@ -177,7 +177,10 @@ def finetune_sft(accelerator: Accelerator,
     )
     
     # Train model
-    sft_trainer.train()
+    
+    # NOTE: if checkpoint, resume; otherwise train from scratch
+    sft_trainer.train(resume_from_checkpoint = output_dir)
+    
     accelerator.wait_for_everyone()
 
     if accelerator.is_local_main_process: 
