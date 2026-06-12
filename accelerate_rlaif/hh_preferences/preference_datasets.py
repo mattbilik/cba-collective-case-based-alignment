@@ -1,7 +1,6 @@
 import datasets
 import torch
 from torch.utils.data import default_collate
-from torch.utils.data import DataLoader
 from torch.nn.utils.rnn import pad_sequence
 from abc import ABC, abstractmethod
 from typing import Dict, List, Optional, Callable, Union
@@ -9,6 +8,8 @@ import json
 import os
 from accelerate import Accelerator
 from transformers import AutoTokenizer
+from torch.utils.data import DataLoader
+from torchdata.stateful_dataloader import StatefulDataLoader
 
 class CAIPipelineDataset(torch.utils.data.Dataset):
     @abstractmethod
@@ -132,16 +133,24 @@ def transform_and_write_base_dataset(old_path: str,
     # This used to be .is_main_process
 
     old_dataset = CAIBasePairDataset([])
-    old_dataset.load(old_path)
+    old_dataset.load(old_path)    
     
     print(f"Length of old dataset: {len(old_dataset)}")
 
     new_dataset = cai_dataset_constructor(old_dataset)
-    
-    print(f"Length of new dataset: {len(new_dataset)}")
 
-    if accelerator.is_local_main_process:
-    
+    accelerator.wait_for_everyone()
+
+    # if accelerator.is_local_main_process:
+        
+    #     print(f"Device of local main process: {accelerator.device}")
+    #     print(f"Length of new dataset: {len(new_dataset)}")
+        
+    if accelerator.is_main_process:
+        print(f"Device of main process: {accelerator.device}")
+        print(f"Length of new dataset: {len(new_dataset)}")
+        print(new_dataset.entries[:2])
+        
         new_dataset.dump(new_path)
         return new_dataset
     
@@ -168,7 +177,7 @@ def get_pytorch_iterator(dataset: CAIPipelineDataset,
                          max_prompt_length: int = 512,
                          truncation_mode: str = "keep_start",
                          num_examples: Optional[int] = None
-                        ) -> DataLoader:
+                        ) -> StatefulDataLoader:
 
     collate_fn = get_collate_fn(tokenizer)
     
@@ -191,7 +200,7 @@ def get_pytorch_iterator(dataset: CAIPipelineDataset,
     
     print("\nPassing dataset to dataloader...")
     
-    dataloader = DataLoader(hf_dataset, 
+    dataloader = StatefulDataLoader(hf_dataset, 
                             batch_size=batch_size,
                             collate_fn=collate_fn,
                             shuffle=shuffle)

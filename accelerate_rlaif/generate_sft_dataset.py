@@ -41,8 +41,10 @@ bnb_config = BitsAndBytesConfig(
 )
 
 class SFTDataset(CAIPipelineDataset):
-    def __init__(self, prompts, initials, revisions):
+    def __init__(self, prompts, initials, revisions, accelerator):
         self.entries = []
+        self.accelerator = accelerator
+        
         for i in range(0, len(prompts)):
             self.entries.append({
                 "prompt": prompts[i],
@@ -57,6 +59,9 @@ class SFTDataset(CAIPipelineDataset):
         return self.entries[idx]
 
     def dump(self, path):
+        
+        print(f"Accelerator device SFT DATASET: {self.accelerator.device}")
+        
         with open(path, 'w', encoding='utf-8') as f:
             json.dump(self.entries, f, ensure_ascii=False, indent=4)
     def load(self, path):
@@ -224,23 +229,55 @@ def revise_responses_on_constitution(batch_prompts,
             
     return initial_completions, responses_to_revise
 
-def run_generation(prompt_iterator, tokenizer, model, accelerator, constitution):
+def run_generation(prompt_iterator, tokenizer, model, accelerator, constitution, checkpoint_dir):
     prompts = []
     initials = []
     reviseds = []
     prompt_idx = 0
-
+    
+    # Updating the iterator to resume from the last checkpoint
+    iterator_checkpoint_path = os.path.join(checkpoint_dir, "sft_dataloader_state.pt")
+    data_checkpoint_path = os.path.json(checkpoint_dir, "sft_checkpoint.json")
+    
+    if os.path.exists(iterator_checkpoint_path) and os.path.exists(data_checkpoint_path):
+        prompt_iterator.load(torch.load(iterator_checkpoint_path))
+        
+        with open(data_checkpoint_path, "rb") as f:
+            checkpoint_data = json.load(f)
+            prompt_idx = checkpoint_data['index']
+    
+    # if not os.path.exists(iterator_checkpoint_path) or not os.path.exists(data_checkpoint_path):
     for batch in tqdm(prompt_iterator, desc="Processing batches"):
         prompt_idx += 1
         print(f' Processing batch: {prompt_idx}')
         print(f'prompt_idx: {prompt_idx}')
+        
+        # Revising initial responses once according to our constitutional principles to get SFT data
         initial, revised = revise_responses_on_constitution(batch,
             model, tokenizer, accelerator, constitution, number_of_revisions=1)
         
         # final_completion = accelerator.gather_for_metrics(final_completion)
+        
+        # NOTE: implementing checkpointing logic here, save revised responses
+        # after every 10 or so batches            
+        
         prompts.extend(batch["prompt"])
         initials.extend(initial)
         reviseds.extend(revised)
+        
+        if prompt_idx % 10 == 0:
+            dataloader_state = prompt_iterator.state_dict()
+            torch.save(dataloader_state, iterator_checkpoint_path)
+
+            with open(data_checkpoint_path, "wb") as f:
+                json.dump({
+                    'prompts': prompts,
+                    'initials': initials,
+                    'reviseds': reviseds,
+                    'index': prompt_idx
+                }, f)
+        
+        print(f"Accelerator device: {accelerator.device}, prompts length {len(prompts)}, initials length {len(initials)}, reviseds length {len(reviseds)}")
     
     accelerator.wait_for_everyone()
 
@@ -253,9 +290,20 @@ def run_generation(prompt_iterator, tokenizer, model, accelerator, constitution)
     reviseds = gather_iterator_batches(reviseds,
                                         accelerator,
                                         prompt_iterator)
+    # else:
+    #     prompt_iterator.load(torch.load(iterator_checkpoint_path))
+        
+    #     pass
+        
+        # print(f"Length of prompts: {len(prompts)}")
+        # print(f"Length of initials: {len(initials)}")
+        # print(f"Length of revisions: {len(reviseds)}")
 
+        # print(f"Sample prompt: {prompts[:5]}")
+        # print(f"Sample initial: {initials[:5]}")
+        # print(f"Sample revision: {reviseds[:5]}")
 
-    return prompts, initials, reviseds
+        return prompts, initials, reviseds
 
 def create_sft_dataset(model: AutoModelForCausalLM,
                      tokenizer: AutoTokenizer,
@@ -263,7 +311,8 @@ def create_sft_dataset(model: AutoModelForCausalLM,
                      constitution: dict,
                      accelerator: Accelerator,
                      batch_size: int,
-                     num_completions: int
+                     num_completions: int,
+                     checkpoint_dir: str
                      ) -> SFTDataset:
     
 
@@ -296,16 +345,31 @@ def create_sft_dataset(model: AutoModelForCausalLM,
                          shuffle = False,
                          max_response_length = 1024,
                          max_prompt_length = 512,
-                         num_examples = num_completions
+                         num_examples = len(base_pair_dataset)
                       )
 
     # We are preparing the model and the iterator here for
     model, prompt_iterator = accelerator.prepare(model, prompt_iterator)    
     accelerator.wait_for_everyone()
+    
     # NOTE: these are the final responses
-    prompts, initials, revisions = run_generation(prompt_iterator, tokenizer, model, accelerator, constitution)     
+    prompts, initials, revisions = run_generation(prompt_iterator, 
+                                                  tokenizer,
+                                                  model, 
+                                                  accelerator, 
+                                                  constitution, 
+                                                  checkpoint_dir)     
+    
     if accelerator.is_main_process:
-        sft_dataset = SFTDataset(prompts, initials, revisions)
+        # print(f"Length of prompts: {len(prompts)}")
+        # print(f"Length of initials: {len(initials)}")
+        # print(f"Length of revisions: {len(revisions)}")
+
+        # print(f"Sample prompt: {prompts[:2]}")
+        # print(f"Sample initial: {initials[:2]}")
+        # print(f"Sample revision: {revisions[:2]}")
+
+        sft_dataset = SFTDataset(prompts, initials, revisions, accelerator)
         return sft_dataset      
       
 if __name__ == "__main__":
@@ -316,6 +380,7 @@ if __name__ == "__main__":
     batch_size = int(sys.argv[4])
     input_dataset_path = sys.argv[5]
     output_dataset_path = sys.argv[6]
+    checkpoint_dir = sys.argv[7]
     
     accelerator = Accelerator()
     
@@ -344,7 +409,8 @@ if __name__ == "__main__":
                                                                         constitution,
                                                                         accelerator,
                                                                         batch_size,
-                                                                        num_completions
+                                                                        num_completions,
+                                                                        checkpoint_dir
                                                                         ),
                                      accelerator
                                     )
