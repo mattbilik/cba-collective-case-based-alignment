@@ -39,16 +39,28 @@ bnb_config = BitsAndBytesConfig(
 )
 
 if __name__ == "__main__":
+
+    config = sys.argv[1]
+    final_model = sys.argv[2]
+
+    with open(config) as f:
+        config = json.load(f)
     
-    trained_model_path = sys.argv[1]
-    baseline_model_path_or_name = sys.argv[2]
-    judge_model_path_or_name = sys.argv[3]
-    constitution_path = sys.argv[4]
-    dataset_path = sys.argv[5]
-    batch_size=sys.argv[6]
+    aws = config["aws"]
+
+    if final_model == "dpo":
+        trained_model_path = config["dpo_model_path"]
+    else:
+        trained_model_path = config["sft_model_path"]
+
+    baseline_model_path_or_name = config["base_model"]
+    judge_model_path_or_name = config["base_model"]
+    constitution_path = config["constitution_path"]
+    dataset_path = config["base_dataset_test_file"]
+    batch_size=config["inference_batch_size"]
     accelerator = Accelerator()
     
-    dataset = CAIBasePairDataset()
+    dataset = CAIBasePairDataset([])
     dataset.load(dataset_path)
     
     with open(constitution_path) as f:

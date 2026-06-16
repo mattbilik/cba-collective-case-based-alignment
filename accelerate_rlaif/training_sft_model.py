@@ -17,6 +17,7 @@ from datasets import Dataset
 import json
 import os
 import time
+import boto3
 from accelerate import Accelerator
 from generate_sft_dataset import SFTDataset
 import sys
@@ -215,7 +216,8 @@ def finetune_sft(accelerator: Accelerator,
 
     # Save trained model
     final_model.save_pretrained(final_model_path)
-        
+    tokenizer = sft_trainer.processing_class  # or however you have the tokenizer referenced
+    tokenizer.save_pretrained(final_model_path)    
 if __name__ == "__main__":
     
     accelerator = Accelerator()
@@ -226,12 +228,26 @@ if __name__ == "__main__":
         
         print(f"Detected {data_parallel_degree} GPUs: {[torch.cuda.get_device_name(i) for i in range(data_parallel_degree)]}")
 
-    model_path_or_name = sys.argv[1]
-    dataset_path = sys.argv[2] 
-    final_model_path = sys.argv[3]
-    checkpoint_dir = sys.argv[4]
+
+    config_file = sys.argv[1]
+    with open(config_file) as f:
+        config = json.load(f)
+    
+    aws = config["aws"]
+    if aws:
+        bucket = config["s3"]
+        s3_client = boto3.client('s3')
+
+    # TODO: check this
+    checkpoint_dir = sys.argv[2]
+    
+    model_path_or_name = config["base_model"]
+    dataset_path = config["sft_dataset_train_file"]
+    final_model_path = config["sft_model_path"]
 
     dataset = SFTDataset([],[],[])
+    if aws:
+        s3_client.download_file(bucket, dataset_path, dataset_path)
     dataset.load(dataset_path)
 
     finetune_sft(accelerator,
@@ -240,6 +256,14 @@ if __name__ == "__main__":
                  model_name=model_path_or_name,
                  final_model_path=final_model_path)
     
+    if aws:
+        for root, dirs, files in os.walk(final_model_path):
+            for file in files:
+                local_path = os.path.join(root, file)
+                # Preserve folder structure as the S3 key
+                s3_key = os.path.relpath(local_path, start=os.path.dirname(final_model_path))
+                s3_client.upload_file(local_path, bucket, s3_key)
+
     if accelerator.is_local_main_process:
         print(f"Time difference: {(time.time() - start_time) / 60} minutes")
         if dist.is_initialized():

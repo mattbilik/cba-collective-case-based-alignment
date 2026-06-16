@@ -11,6 +11,7 @@ from sentence_transformers import SentenceTransformer
 import torch
 from datasets import Dataset
 import torch.distributed as dist
+import boto3
 
 from helpers.model_funcs import get_completions
 from helpers.accelerate_funcs import gather_iterator_batches
@@ -378,21 +379,36 @@ def create_sft_dataset(model: AutoModelForCausalLM,
         return sft_dataset      
       
 if __name__ == "__main__":
+
+    config_file = sys.argv[1]
+    with open(config_file) as f:
+        config = json.load(f)
+
+    mode = sys.argv[2]
+    aws = config["aws"]
+    if aws:
+        bucket = config["s3"]
+        s3_client = boto3.client('s3')
     
-    model_name = sys.argv[1]
-    constitution_path = sys.argv[2]
-    num_completions = int(sys.argv[3])
-    batch_size = int(sys.argv[4])
-    input_dataset_path = sys.argv[5]
-    output_dataset_path = sys.argv[6]
-    checkpoint_dir = sys.argv[7]
+    # TODO: fix this
+    checkpoint_dir = sys.argv[3]
+
+    model_name = config["base_model"]
+    constitution_file_path = config["constitution_path"]
+    batch_size = config["inference_batch_size"]
+    if mode == "train":
+        num_completions = config["sft_dataset_train_size"]
+        output_dataset_path = config["sft_dataset_train_file"]
+        input_dataset_path = config["base_dataset_train_file"]
+    else:
+        num_completions = config["sft_dataset_test_size"]
+        output_dataset_path = config["sft_dataset_test_file"]
+        input_dataset_path = config["base_dataset_test_file"]
+
     
     accelerator = Accelerator()
     
     with accelerator.main_process_first():
-        constitution_folder = os.path.join(os.path.dirname(__file__), 'constitutions')
-        os.makedirs(constitution_folder, exist_ok=True)
-        constitution_file_path = os.path.join(constitution_folder, os.path.basename(constitution_path))
 
         with open(constitution_file_path, 'r') as f:
             constitution = json.load(f)
@@ -417,8 +433,11 @@ if __name__ == "__main__":
                                                                         num_completions,
                                                                         checkpoint_dir
                                                                         ),
-                                     accelerator
+                                     accelerator,
+                                     s3_client,
+                                     bucket
                                     )
     if accelerator.is_local_main_process:
         if dist.is_initialized():
             dist.destroy_process_group()
+    

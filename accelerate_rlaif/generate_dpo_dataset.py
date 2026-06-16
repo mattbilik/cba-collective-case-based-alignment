@@ -26,9 +26,18 @@ class DPODataset(CAIPipelineDataset):
     def to_hf(self):
         return Dataset.from_list(self.entries)
 
-if __name__ == '__main__':    
-    sft_dataset_path = sys.argv[1]
-    output_dataset_path = sys.argv[2]
+if __name__ == '__main__':  
+    config_path = sys.argv[1]
+    mode = sys.argv[2]
+    with open(config_path) as f:
+        config = json.load(f)
+    if mode == "train":
+        sft_dataset_path = config["sft_dataset_train_file"]
+        output_dataset_path = config["dpo_dataset_train_file"]
+    else:
+        sft_dataset_path = config["sft_dataset_test_file"]
+        output_dataset_path = config["dpo_dataset_test_file"]
+
     sft_dataset = SFTDataset([],[],[])
     sft_dataset.load(sft_dataset_path)
     prompts = [elem["prompt"] for elem in sft_dataset]

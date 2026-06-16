@@ -134,22 +134,28 @@ if __name__ == '__main__':
         data_parallel_degree = torch.cuda.device_count()
         print(f"Detected {data_parallel_degree} GPUs: {[torch.cuda.get_device_name(i) for i in range(data_parallel_degree)]}")
 
-    dataset_path = sys.argv[1]
-    input_model_path_or_name = sys.argv[2]    
+    config_file = sys.argv[1]
+    with open(config_file) as f:
+        config = json.load(f)
+        
+    # TODO: check this
+    checkpoint_dir = sys.argv[2]
     
-    checkpointing_dir = sys.argv[3]    
-    
-    output_model_path = sys.argv[4]
-    batch_size = int(sys.argv[5])
-    
+    aws = config["aws"]
+    dataset_path = config["dpo_dataset_train_file"]
+    input_model_path_or_name = config["dpo_input_model"]
+    output_directory = config["log_dir"]
+    output_model_path = config["dpo_model_path"]
+    batch_size = config["training_batch_size"]
+
     dataset = DPODataset([],[],[])
     dataset.load(dataset_path)
-    
+
     train_with_dpo(dataset,
                    accelerator,
                    input_model_path_or_name,
                    output_model_path,
-                   checkpointing_dir,
+                   checkpoint_dir,
                    batch_size)
 
     if accelerator.is_local_main_process:
