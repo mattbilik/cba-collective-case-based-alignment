@@ -46,5 +46,10 @@ accelerate launch -m lm_eval --model hf \
     --tasks mmlu,bbq,gsm8k \
     --batch_size 16
 
+echo "------------------------------------"
+echo "testing with win rate (log prob) against baseline"
+accelerate launch --multi_gpu --num_processes $NUM_GPUS accelerate_rlaif/win_rate_vs_baseline.py models/grpo_model_constitution_FINAL $MODEL $MODEL constitution_from_doc.json datasets/base_test.json, 16 > results/win_rate_log_prob.txt
+
+
 # accelerate launch --multi_gpu --num_processes $NUM_GPUS accelerate_rlaif/benchmark_testing_suite/mmlu.py models/sft_model HuggingFaceTB/SmolLM2-135M-Instruct
 # accelerate launch --multi_gpu --num_processes $NUM_GPUS accelerate_rlaif/benchmark_testing_suite/mmlu.py models/dpo_model HuggingFaceTB/SmolLM2-135M-Instruct
