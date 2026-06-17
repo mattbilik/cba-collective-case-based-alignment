@@ -54,7 +54,8 @@ def train_with_dpo(dataset: Dataset,
                    accelerator: Accelerator,
                    input_model_path_or_name: str,
                    output_model_path: str, 
-                   checkpointing_dir: str,
+                   checkpoint_dir: str,
+                   checkpointing_bool: bool,
                    batch_size: int = 2):
     
     final_model_path = os.path.abspath(output_model_path)
@@ -69,7 +70,7 @@ def train_with_dpo(dataset: Dataset,
     )
 
     dpo_config = DPOConfig(
-        output_dir=checkpointing_dir,
+        output_dir=checkpoint_dir,
         per_device_train_batch_size=batch_size,
         gradient_accumulation_steps=8,
         num_train_epochs=8,
@@ -101,8 +102,14 @@ def train_with_dpo(dataset: Dataset,
     )
     
     # grpo_trainer.model.quantization_config = bnb_config
+    
+    if checkpointing_bool:
+        accelerator.print("Resuming from checkpointing directory (if there is one):", checkpoint_dir)
+        dpo_trainer.train(resume_from_checkpoint = checkpoint_dir)
+    else:
+        accelerator.print("Training from scratch")
+        dpo_trainer.train()
         
-    dpo_trainer.train(resume_from_checkpoint = checkpointing_dir)
     accelerator.wait_for_everyone()
     
     if accelerator.is_local_main_process: 
@@ -110,7 +117,7 @@ def train_with_dpo(dataset: Dataset,
         dpo_log = dpo_trainer.state.log_history
         
         # Save the GRPO log
-        log_path = os.path.join(checkpointing_dir, "dpo_training_log.json")
+        log_path = os.path.join(checkpoint_dir, "dpo_training_log.json")
         
         with open(log_path, "w") as log_file:
             json.dump(dpo_log, log_file, indent=4)
@@ -139,11 +146,11 @@ if __name__ == '__main__':
         config = json.load(f)
         
     checkpoint_dir = config["checkpoint_dir"]
+    checkpointing_bool = config["checkpointing_bool"]
 
     aws = config["aws"]
     dataset_path = config["dpo_dataset_train_file"]
     input_model_path_or_name = config["dpo_input_model"]
-    output_directory = config["log_dir"]
     output_model_path = config["dpo_model_path"]
     batch_size = config["training_batch_size"]
 
@@ -155,6 +162,7 @@ if __name__ == '__main__':
                    input_model_path_or_name,
                    output_model_path,
                    checkpoint_dir,
+                   checkpointing_bool,
                    batch_size)
 
     if accelerator.is_local_main_process:
