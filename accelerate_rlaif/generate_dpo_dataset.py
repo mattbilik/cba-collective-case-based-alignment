@@ -6,7 +6,6 @@ from generate_sft_dataset import SFTDataset
 from hh_preferences.preference_datasets import CAIPipelineDataset
 from datasets import Dataset
 
-
 class DPODataset(CAIPipelineDataset):
     def __init__(self, prompts, chosen, rejected):
         self.entries = []

@@ -125,8 +125,6 @@ def finetune_sft(accelerator: Accelerator,
                  model_name: str = MODEL_NAME,
                  final_model_path: str = None):
         
-    output_dir=f"/data/checkpoints/{model_name}-constitution-checkpoints"
-    
     model = AutoModelForCausalLM.from_pretrained(
         model_name,
         quantization_config=bnb_config,
@@ -157,7 +155,7 @@ def finetune_sft(accelerator: Accelerator,
     #     report_to="tensorboard"
     # )
     sft_config = SFTConfig(
-        output_dir=output_dir,
+        output_dir=checkpoint_dir,
         max_length=512,
         per_device_train_batch_size=1,
         gradient_accumulation_steps=8,
@@ -167,7 +165,7 @@ def finetune_sft(accelerator: Accelerator,
         report_to="tensorboard",
         ddp_find_unused_parameters=False,
         num_train_epochs=num_train_epochs,
-        logging_steps=logging_steps
+        logging_steps=logging_steps,
     )
     
     # TRL calls get_peft_model() automatically with peft_config
@@ -179,7 +177,10 @@ def finetune_sft(accelerator: Accelerator,
     )
     
     # Train model
-    sft_trainer.train()
+    
+    # NOTE: if checkpoint, resume; otherwise train from scratch
+    sft_trainer.train(resume_from_checkpoint = checkpoint_dir)
+    
     accelerator.wait_for_everyone()
 
     if accelerator.is_local_main_process: 
@@ -225,6 +226,7 @@ if __name__ == "__main__":
         
         print(f"Detected {data_parallel_degree} GPUs: {[torch.cuda.get_device_name(i) for i in range(data_parallel_degree)]}")
 
+
     config_file = sys.argv[1]
     with open(config_file) as f:
         config = json.load(f)
@@ -234,6 +236,9 @@ if __name__ == "__main__":
         bucket = config["s3"]
         s3_client = boto3.client('s3')
 
+    # TODO: check this
+    checkpoint_dir = sys.argv[2]
+    
     model_path_or_name = config["base_model"]
     dataset_path = config["sft_dataset_train_file"]
     final_model_path = config["sft_model_path"]
@@ -246,6 +251,7 @@ if __name__ == "__main__":
 
     finetune_sft(accelerator,
                  dataset,
+                 checkpoint_dir,
                  model_name=model_path_or_name,
                  log_dir=log_dir,
                  final_model_path=final_model_path)
