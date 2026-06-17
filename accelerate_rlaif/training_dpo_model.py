@@ -138,9 +138,7 @@ if __name__ == '__main__':
     with open(config_file) as f:
         config = json.load(f)
         
-    # TODO: check this
-    checkpoint_dir = sys.argv[2]
-    
+    checkpoint_dir = config["checkpoint_dir"]
     aws = config["aws"]
     dataset_path = config["dpo_dataset_train_file"]
     input_model_path_or_name = config["dpo_input_model"]

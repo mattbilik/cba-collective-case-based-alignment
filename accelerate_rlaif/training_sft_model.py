@@ -238,9 +238,7 @@ if __name__ == "__main__":
         bucket = config["s3"]
         s3_client = boto3.client('s3')
 
-    # TODO: check this
-    checkpoint_dir = sys.argv[2]
-    
+    checkpoint_dir = config["checkpoint_dir"]
     model_path_or_name = config["base_model"]
     dataset_path = config["sft_dataset_train_file"]
     final_model_path = config["sft_model_path"]

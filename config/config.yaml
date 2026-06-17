@@ -1,3 +1,7 @@
+# NOTE: using this config file
+
+checkpointing_bool: false
+
 # random seed for batch sampling
 seed: 0
 
