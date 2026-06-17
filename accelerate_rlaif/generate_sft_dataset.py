@@ -42,9 +42,8 @@ bnb_config = BitsAndBytesConfig(
 )
 
 class SFTDataset(CAIPipelineDataset):
-    def __init__(self, prompts, initials, revisions, accelerator):
+    def __init__(self, prompts, initials, revisions):
         self.entries = []
-        self.accelerator = accelerator
         
         for i in range(0, len(prompts)):
             self.entries.append({
@@ -60,9 +59,6 @@ class SFTDataset(CAIPipelineDataset):
         return self.entries[idx]
 
     def dump(self, path):
-        
-        print(f"Accelerator device SFT DATASET: {self.accelerator.device}")
-        
         with open(path, 'w', encoding='utf-8') as f:
             json.dump(self.entries, f, ensure_ascii=False, indent=4)
     def load(self, path):
@@ -97,7 +93,6 @@ def get_all_turns_and_format(dialogue: str) -> list[str, str]:
             if assistant_response != '':
                 dialogue_pairs.append({'role': 'assistant', 'content': assistant_response})
 
-    print(f"DIALOGUE PAIRS: {dialogue_pairs}")
     
     return dialogue_pairs
 
@@ -182,7 +177,7 @@ def revise_responses_on_constitution(batch_prompts,
 
     # Get initial completions for the batch of prompts
     revision_instructions = random.choice(constitution['principles'])
-    random_principle = revision_instructions['description']
+    random_principle = revision_instructions['revise']
         
     tokenized_batch_prompts = tokenize_chat_history(batch_prompts, tokenizer)
     
@@ -195,7 +190,6 @@ def revise_responses_on_constitution(batch_prompts,
        
     responses_to_revise = initial_completions
     
-    print(f"Initial completions: {responses_to_revise}" )
     
     """
     User: lorem ipsum
@@ -261,8 +255,6 @@ def run_generation(prompt_iterator,
     # if not os.path.exists(iterator_checkpoint_path) or not os.path.exists(data_checkpoint_path):
     for batch in tqdm(prompt_iterator, desc="Processing batches"):
         prompt_idx += 1
-        print(f' Processing batch: {prompt_idx}')
-        print(f'prompt_idx: {prompt_idx}')
         
         # Revising initial responses once according to our constitutional principles to get SFT data
         initial, revised = revise_responses_on_constitution(batch,
@@ -331,7 +323,6 @@ def create_sft_dataset(model: AutoModelForCausalLM,
 
     # Print the current working directory
     with accelerator.main_process_first():
-        print("Current working directory:", os.getcwd())
         
         # Limit number of completions if specified
         if num_completions <= 0:
@@ -345,7 +336,6 @@ def create_sft_dataset(model: AutoModelForCausalLM,
             embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
             
             for principle in constitution['principles']:
-                print(f"Principle: {principle['principle']}")
                 embeddings = embedding_model.encode(principle['cases'])
                 principle['case_embeddings'] = embeddings
                     

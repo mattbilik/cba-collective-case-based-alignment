@@ -27,8 +27,3 @@ accelerate launch --multi_gpu --num_processes $NUM_GPUS accelerate_rlaif/trainin
 echo "------------------------------------"
 echo "testing with win rate (log prob) against baseline"
 accelerate launch --multi_gpu --num_processes $NUM_GPUS accelerate_rlaif/win_rate_vs_baseline.py $CONFIG dpo
-
-echo "------------------------------------"
-echo "testing with win rate (reward model) against baseline"
-accelerate launch --multi_gpu --num_processes $NUM_GPUS accelerate_rlaif/reward_model_scoring_vs_baseline.py $CONFIG
-# Add figures after all of the JSON files that are downloaded to results are completed

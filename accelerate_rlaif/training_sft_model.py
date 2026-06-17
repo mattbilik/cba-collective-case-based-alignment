@@ -121,12 +121,10 @@ logging_steps = 5
 
 def finetune_sft(accelerator: Accelerator,
                  dataset: Dataset,
-                 checkpoint_dir: str,
+                 log_dir: str,
                  model_name: str = MODEL_NAME,
                  final_model_path: str = None):
         
-    # output_dir=f"{model_name}-constitution-checkpoints"
-    
     model = AutoModelForCausalLM.from_pretrained(
         model_name,
         quantization_config=bnb_config,
@@ -190,7 +188,7 @@ def finetune_sft(accelerator: Accelerator,
         sft_log = sft_trainer.state.log_history
         
         # Save the SFT log
-        log_path = "sft_log.json"
+        log_path = "{}/sft_log.json".format(log_dir)
         with open(log_path, "w") as log_file:
             json.dump(sft_log, log_file, indent=4)
                 
@@ -239,9 +237,11 @@ if __name__ == "__main__":
         s3_client = boto3.client('s3')
 
     checkpoint_dir = config["checkpoint_dir"]
+    
     model_path_or_name = config["base_model"]
     dataset_path = config["sft_dataset_train_file"]
     final_model_path = config["sft_model_path"]
+    log_dir = config["log_dir"]
 
     dataset = SFTDataset([],[],[])
     if aws:
