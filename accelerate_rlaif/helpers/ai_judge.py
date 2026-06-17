@@ -220,15 +220,16 @@ def generate_responses_and_judgments(response_model1, response_model2, judge_mod
     #need a model that hasn't been wrapped by accelerate yet (?)
 
     #create dataset of triples
-    if accelerator.is_main_process:
-        judgment_cases = JudgmentDataset(raw_prompts, response_1s, response_2s, tokenizer, constitution)
-        judgment_collator = get_judgment_collate_fn(tokenizer)
+    judgment_cases = JudgmentDataset(raw_prompts, response_1s, response_2s, tokenizer, constitution)
+    judgment_collator = get_judgment_collate_fn(tokenizer)
     
-        #dividing batch_size by two here because judging cases seems a bit more mem intensive than generating responses?
-        #not sure why though need to investigate further
-        judgment_case_iterator = DataLoader(judgment_cases, batch_size = batch_size, collate_fn = judgment_collator)
-        judge_model = accelerator.prepare(judge_model)
-        judgment_case_iterator = accelerator.prepare(judgment_case_iterator)
+    #dividing batch_size by two here because judging cases seems a bit more mem intensive than generating responses?
+    #not sure why though need to investigate further
+    judgment_case_iterator = DataLoader(judgment_cases, batch_size = batch_size, collate_fn = judgment_collator)
+    
+    judge_model = accelerator.prepare(judge_model)
+    judgment_case_iterator = accelerator.prepare(judgment_case_iterator)
+
     accelerator.wait_for_everyone()
     judgments = judge_outputs(judge_model, tokenizer, accelerator, judgment_case_iterator, batch_size)
     if accelerator.is_main_process:

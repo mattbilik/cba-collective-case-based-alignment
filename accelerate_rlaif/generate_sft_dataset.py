@@ -92,7 +92,6 @@ def get_all_turns_and_format(dialogue: str) -> list[str, str]:
             if assistant_response != '':
                 dialogue_pairs.append({'role': 'assistant', 'content': assistant_response})
 
-    print(f"DIALOGUE PAIRS: {dialogue_pairs}")
     
     return dialogue_pairs
 
@@ -190,7 +189,6 @@ def revise_responses_on_constitution(batch_prompts,
        
     responses_to_revise = initial_completions
     
-    print(f"Initial completions: {responses_to_revise}" )
     
     """
     User: lorem ipsum
@@ -233,8 +231,6 @@ def run_generation(prompt_iterator, tokenizer, model, accelerator, constitution)
 
     for batch in tqdm(prompt_iterator, desc="Processing batches"):
         prompt_idx += 1
-        print(f' Processing batch: {prompt_idx}')
-        print(f'prompt_idx: {prompt_idx}')
         initial, revised = revise_responses_on_constitution(batch,
             model, tokenizer, accelerator, constitution, number_of_revisions=1)
         
@@ -270,7 +266,6 @@ def create_sft_dataset(model: AutoModelForCausalLM,
 
     # Print the current working directory
     with accelerator.main_process_first():
-        print("Current working directory:", os.getcwd())
         
         # Limit number of completions if specified
         if num_completions <= 0:
@@ -284,7 +279,6 @@ def create_sft_dataset(model: AutoModelForCausalLM,
             embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
             
             for principle in constitution['principles']:
-                print(f"Principle: {principle['principle']}")
                 embeddings = embedding_model.encode(principle['cases'])
                 principle['case_embeddings'] = embeddings
                     

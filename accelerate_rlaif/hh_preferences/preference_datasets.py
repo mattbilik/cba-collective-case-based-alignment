@@ -140,11 +140,9 @@ def transform_and_write_base_dataset(old_path: str,
     old_dataset = CAIBasePairDataset([])
     old_dataset.load(old_path)
     
-    print(f"Length of old dataset: {len(old_dataset)}")
 
     new_dataset = cai_dataset_constructor(old_dataset)
     
-    print(f"Length of new dataset: {len(new_dataset)}")
 
     if accelerator.is_local_main_process:
     
