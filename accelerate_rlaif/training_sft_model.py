@@ -186,7 +186,6 @@ def finetune_sft(accelerator: Accelerator,
     else:
         accelerator.print("Training from scratch")
         sft_trainer.train()
-        
     
     accelerator.wait_for_everyone()
 
