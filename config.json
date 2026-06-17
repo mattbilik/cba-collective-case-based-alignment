@@ -19,6 +19,7 @@
     "dpo_input_model": "/data/models/sft_model",
     "dpo_model_path": "/data/models/dpo_model",
     "log_dir": "/data/logs",
+    "checkpoint_dir": "/data/checkpoints/",
     "metrics_file": "/data/results/metrics.txt",
     "s3": "case-based-alignment"
 }

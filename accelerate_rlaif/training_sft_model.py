@@ -237,7 +237,7 @@ if __name__ == "__main__":
         s3_client = boto3.client('s3')
 
     # TODO: check this
-    checkpoint_dir = sys.argv[2]
+    checkpoint_dir = config["checkpoint_dir"]
     
     model_path_or_name = config["base_model"]
     dataset_path = config["sft_dataset_train_file"]
@@ -253,7 +253,6 @@ if __name__ == "__main__":
                  dataset,
                  checkpoint_dir,
                  model_name=model_path_or_name,
-                 log_dir=log_dir,
                  final_model_path=final_model_path)
     
     if aws:

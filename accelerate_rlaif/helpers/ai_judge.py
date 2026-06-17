@@ -53,7 +53,7 @@ class JudgmentDataset(Dataset):
                 first_response = self.responseBs[idx]
                 second_response = self.responseAs[idx]
 
-            principle = self.principles[idx]
+            principle = self.principles[idx]["choose"]
 
             prompt = f"""
                 Consider the following conversation between a human and an assistant: 

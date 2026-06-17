@@ -42,9 +42,8 @@ bnb_config = BitsAndBytesConfig(
 )
 
 class SFTDataset(CAIPipelineDataset):
-    def __init__(self, prompts, initials, revisions, accelerator):
+    def __init__(self, prompts, initials, revisions):
         self.entries = []
-        self.accelerator = accelerator
         
         for i in range(0, len(prompts)):
             self.entries.append({
@@ -60,9 +59,6 @@ class SFTDataset(CAIPipelineDataset):
         return self.entries[idx]
 
     def dump(self, path):
-        
-        print(f"Accelerator device SFT DATASET: {self.accelerator.device}")
-        
         with open(path, 'w', encoding='utf-8') as f:
             json.dump(self.entries, f, ensure_ascii=False, indent=4)
     def load(self, path):
@@ -181,7 +177,7 @@ def revise_responses_on_constitution(batch_prompts,
 
     # Get initial completions for the batch of prompts
     revision_instructions = random.choice(constitution['principles'])
-    random_principle = revision_instructions['description']
+    random_principle = revision_instructions['revise']
         
     tokenized_batch_prompts = tokenize_chat_history(batch_prompts, tokenizer)
     
@@ -385,7 +381,7 @@ if __name__ == "__main__":
         s3_client = boto3.client('s3')
     
     # TODO: fix this
-    checkpoint_dir = sys.argv[3]
+    checkpoint_dir = config["checkpoint_dir"]
 
     model_name = config["base_model"]
     constitution_file_path = config["constitution_path"]
