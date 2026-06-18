@@ -121,7 +121,8 @@ logging_steps = 5
 
 def finetune_sft(accelerator: Accelerator,
                  dataset: Dataset,
-                 log_dir: str,
+                 checkpoint_dir: str,
+                 checkpointing_bool: bool,
                  model_name: str = MODEL_NAME,
                  final_model_path: str = None):
         
@@ -183,7 +184,12 @@ def finetune_sft(accelerator: Accelerator,
     # Train model
     
     # NOTE: if checkpoint, resume; otherwise train from scratch
-    sft_trainer.train(resume_from_checkpoint = checkpoint_dir)
+    if checkpointing_bool:
+        accelerator.print("Resuming from checkpointing directory (if there is one):", checkpoint_dir)
+        sft_trainer.train(resume_from_checkpoint = checkpoint_dir)
+    else:
+        accelerator.print("Training from scratch")
+        sft_trainer.train()
     
     accelerator.wait_for_everyone()
 
@@ -192,7 +198,7 @@ def finetune_sft(accelerator: Accelerator,
         sft_log = sft_trainer.state.log_history
         
         # Save the SFT log
-        log_path = "{}/sft_log.json".format(log_dir)
+        log_path = "{}/sft_log.json".format(checkpoint_dir)
         with open(log_path, "w") as log_file:
             json.dump(sft_log, log_file, indent=4)
                 
@@ -240,13 +246,12 @@ if __name__ == "__main__":
         bucket = config["s3"]
         s3_client = boto3.client('s3')
 
-    # TODO: check this
     checkpoint_dir = config["checkpoint_dir"]
+    checkpointing_bool = config["checkpointing_bool"]
     
     model_path_or_name = config["base_model"]
     dataset_path = config["sft_dataset_train_file"]
-    final_model_path = config["sft_model_path"]
-    log_dir = config["log_dir"]
+    output_model_path = config["sft_model_path"]
 
     dataset = SFTDataset([],[],[])
     if aws:
@@ -256,15 +261,16 @@ if __name__ == "__main__":
     finetune_sft(accelerator,
                  dataset,
                  checkpoint_dir,
+                 checkpointing_bool,
                  model_name=model_path_or_name,
-                 final_model_path=final_model_path)
+                 final_model_path=output_model_path)
     
     if aws:
-        for root, dirs, files in os.walk(final_model_path):
+        for root, dirs, files in os.walk(output_model_path):
             for file in files:
                 local_path = os.path.join(root, file)
                 # Preserve folder structure as the S3 key
-                s3_key = os.path.relpath(local_path, start=os.path.dirname(final_model_path))
+                s3_key = os.path.relpath(local_path, start=os.path.dirname(output_model_path))
                 s3_client.upload_file(local_path, bucket, s3_key)
 
     if accelerator.is_local_main_process:

@@ -224,7 +224,13 @@ def revise_responses_on_constitution(batch_prompts,
             
     return initial_completions, responses_to_revise
 
-def run_generation(prompt_iterator, tokenizer, model, accelerator, constitution, checkpoint_dir):
+def run_generation(prompt_iterator, 
+                   tokenizer, 
+                   model, 
+                   accelerator, 
+                   constitution, 
+                   checkpoint_dir, 
+                   checkpointing_bool):
     prompts = []
     initials = []
     reviseds = []
@@ -234,7 +240,7 @@ def run_generation(prompt_iterator, tokenizer, model, accelerator, constitution,
     iterator_checkpoint_path = os.path.join(checkpoint_dir, "sft_dataloader_state.pt")
     data_checkpoint_path = os.path.join(checkpoint_dir, "sft_checkpoint.json")
     
-    if os.path.exists(iterator_checkpoint_path) and os.path.exists(data_checkpoint_path):
+    if checkpointing_bool and os.path.exists(iterator_checkpoint_path) and os.path.exists(data_checkpoint_path):
         prompt_iterator.load(torch.load(iterator_checkpoint_path))
         
         with open(data_checkpoint_path, "rb") as f:
@@ -263,7 +269,7 @@ def run_generation(prompt_iterator, tokenizer, model, accelerator, constitution,
         initials.extend(initial)
         reviseds.extend(revised)
         
-        if prompt_idx % 10 == 0:
+        if prompt_idx % 10 == 0 and checkpointing_bool:
             dataloader_state = prompt_iterator.state_dict()
             torch.save(dataloader_state, iterator_checkpoint_path)
 
@@ -310,7 +316,8 @@ def create_sft_dataset(model: AutoModelForCausalLM,
                      accelerator: Accelerator,
                      batch_size: int,
                      num_completions: int,
-                     checkpoint_dir: str
+                     checkpoint_dir: str,
+                     checkpointing_bool: bool
                      ) -> SFTDataset:
     
 
@@ -354,7 +361,8 @@ def create_sft_dataset(model: AutoModelForCausalLM,
                                                   model, 
                                                   accelerator, 
                                                   constitution, 
-                                                  checkpoint_dir)     
+                                                  checkpoint_dir,
+                                                  checkpointing_bool)     
     
     if accelerator.is_main_process:
         # print(f"Length of prompts: {len(prompts)}")
@@ -380,9 +388,9 @@ if __name__ == "__main__":
         bucket = config["s3"]
         s3_client = boto3.client('s3')
     
-    # TODO: fix this
+    checkpointing_bool = config["checkpointing_bool"]
     checkpoint_dir = config["checkpoint_dir"]
-
+    
     model_name = config["base_model"]
     constitution_file_path = config["constitution_path"]
     batch_size = config["inference_batch_size"]
@@ -395,7 +403,6 @@ if __name__ == "__main__":
         output_dataset_path = config["sft_dataset_test_file"]
         input_dataset_path = config["base_dataset_test_file"]
 
-    
     accelerator = Accelerator()
     
     with accelerator.main_process_first():
@@ -421,7 +428,8 @@ if __name__ == "__main__":
                                                                         accelerator,
                                                                         batch_size,
                                                                         num_completions,
-                                                                        checkpoint_dir
+                                                                        checkpoint_dir,
+                                                                        checkpointing_bool
                                                                         ),
                                      accelerator,
                                      s3_client,
