@@ -93,10 +93,17 @@ def train_with_dpo(dataset: Dataset,
         report_to="tensorboard"
     )
 
+    hf_dataset = dataset.to_hf()
+    hf_dataset = hf_dataset.map(lambda x: {
+        "prompt": x["prompt"].rstrip() + "\n",
+        "chosen": x["chosen"].lstrip(),
+        "rejected": x["rejected"].lstrip(),
+    })
+
     dpo_trainer = DPOTrainer(
         model=input_model_path_or_name,
         args=dpo_config,
-        train_dataset=dataset.to_hf(),
+        train_dataset=hf_dataset,
         peft_config=peft_config, # NOTE: setting the processing class here to use the reward tokenizer
     )
     

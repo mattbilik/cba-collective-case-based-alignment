@@ -133,6 +133,10 @@ def finetune_sft(accelerator: Accelerator,
     
     model = prepare_model_for_kbit_training(model)
     dataset = dataset.to_hf()
+    dataset = dataset.map(lambda x: {
+        "prompt": x["prompt"].rstrip() + "\n",
+        "completion": x["completion"].lstrip(),
+    })
     # training_arguments = TrainingArguments(
     #     output_dir=output_dir,
     #     num_train_epochs=num_train_epochs,
