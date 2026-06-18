@@ -33,7 +33,7 @@ MODEL_NAME = "Qwen/Qwen2-1.5B"
 # Activate 4-bit precision base model loading
 use_4bit = True
 # Compute dtype for 4-bit base models
-bnb_4bit_compute_dtype = "float16"
+bnb_4bit_compute_dtype = "bfloat16"
 # Quantization type (fp4 or nf4)
 bnb_4bit_quant_type = "nf4"
 # Activate nested quantization for 4-bit base models (double quantization)
@@ -128,11 +128,11 @@ def finetune_sft(accelerator: Accelerator,
         
     model = AutoModelForCausalLM.from_pretrained(
         model_name,
-        quantization_config=bnb_config,
+ #       quantization_config=bnb_config,
         dtype=compute_dtype,
     )
     
-    model = prepare_model_for_kbit_training(model)
+ #   model = prepare_model_for_kbit_training(model)
     dataset = dataset.to_hf()
     dataset = dataset.map(lambda x: {
         "prompt": x["prompt"].rstrip() + "\n",
@@ -166,7 +166,7 @@ def finetune_sft(accelerator: Accelerator,
         gradient_accumulation_steps=8,
         gradient_checkpointing=True,
         optim="paged_adamw_8bit",
-        fp16=True, # or bf16=True
+        bf16=True, # or bf16=True
         report_to="tensorboard",
         ddp_find_unused_parameters=False,
         num_train_epochs=num_train_epochs,
@@ -177,7 +177,7 @@ def finetune_sft(accelerator: Accelerator,
     sft_trainer = SFTTrainer(
         model=model,
         train_dataset=dataset,
-        peft_config=lora_config,
+ #       peft_config=lora_config,
         args=sft_config,
     )
     
@@ -220,7 +220,7 @@ def finetune_sft(accelerator: Accelerator,
         # plt.close()
         
     final_model = accelerator.unwrap_model(sft_trainer.model)
-    final_model = final_model.merge_and_unload()
+#    final_model = final_model.merge_and_unload()
 
     # Save trained model
     final_model.save_pretrained(final_model_path)

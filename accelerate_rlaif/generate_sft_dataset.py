@@ -25,7 +25,7 @@ CASE_REGIME = "constitution"
 # Activate 4-bit precision base model loading
 use_4bit = True
 # Compute dtype for 4-bit base models
-bnb_4bit_compute_dtype = "float16"
+bnb_4bit_compute_dtype = "bfloat16"
 # Quantization type (fp4 or nf4)
 bnb_4bit_quant_type = "nf4"
 # Activate nested quantization for 4-bit base models (double quantization)
@@ -373,7 +373,7 @@ def create_sft_dataset(model: AutoModelForCausalLM,
         # print(f"Sample initial: {initials[:2]}")
         # print(f"Sample revision: {revisions[:2]}")
 
-        sft_dataset = SFTDataset(prompts, initials, revisions, accelerator)
+        sft_dataset = SFTDataset(prompts, initials, revisions)
         return sft_dataset      
       
 if __name__ == "__main__":
@@ -416,7 +416,7 @@ if __name__ == "__main__":
         model = AutoModelForCausalLM.from_pretrained(
                     model_name,
                     dtype=compute_dtype,
-                    quantization_config=bnb_config,
+                    #quantization_config=bnb_config,
                 )
 
     transform_and_write_base_dataset(input_dataset_path,
