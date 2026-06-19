@@ -71,6 +71,7 @@ if __name__ == "__main__":
 
         tokenizer = AutoTokenizer.from_pretrained(trained_model_path,
                                                     padding_side='left')
+        
         tokenizer.pad_token_id = tokenizer.eos_token_id
 
         trained_model = AutoModelForCausalLM.from_pretrained(

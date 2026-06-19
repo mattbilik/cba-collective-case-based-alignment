@@ -86,7 +86,8 @@ class JudgmentDataset(Dataset):
 
             p_len = len(tokenized_prompt["input_ids"])
 
-             
+
+            # We compute the log probabilities for response (A) and response (B)
             return {"A": prompt_with_A, "B": prompt_with_B, "p_len": torch.tensor(p_len)}
 
 
@@ -173,8 +174,12 @@ def score_batch(judge_model, accelerator, batch):
     scoreB = compute_log_probs(judge_model, accelerator, batch["B"], batch["p_len"])
     return torch.sigmoid(scoreA - scoreB)
 
-def judge_outputs(judge_model, tokenizer, accelerator, judgment_case_iterator, batch_size):
+def judge_outputs(judge_model, accelerator, judgment_case_iterator, batch_size):
     final_scores = []
+    
+    # NOTE: we are not using the tokenizer here?
+    # The batches are already tokenized
+    
     for batch in tqdm(judgment_case_iterator, desc="Processing batches"):
         scores = score_batch(judge_model, accelerator, batch)
         final_scores.extend(scores.cpu().tolist())
@@ -216,22 +221,24 @@ def generate_responses_and_judgments(response_model1, response_model2, judge_mod
     gc.collect()                                                                                                                                                                                                        
     torch.cuda.empty_cache()                                                                                                                                                                                         
 
+    # Need a model that hasn't been wrapped by accelerate yet (?)
 
-    #need a model that hasn't been wrapped by accelerate yet (?)
-
-    #create dataset of triples
+    # Create dataset of triples
     judgment_cases = JudgmentDataset(raw_prompts, response_1s, response_2s, tokenizer, constitution)
     judgment_collator = get_judgment_collate_fn(tokenizer)
     
-    #dividing batch_size by two here because judging cases seems a bit more mem intensive than generating responses?
-    #not sure why though need to investigate further
+    # Dividing batch_size by two here because judging cases seems a bit more mem intensive than generating responses?
+    # Not sure why though need to investigate further
     judgment_case_iterator = DataLoader(judgment_cases, batch_size = batch_size, collate_fn = judgment_collator)
     
     judge_model = accelerator.prepare(judge_model)
     judgment_case_iterator = accelerator.prepare(judgment_case_iterator)
 
     accelerator.wait_for_everyone()
-    judgments = judge_outputs(judge_model, tokenizer, accelerator, judgment_case_iterator, batch_size)
+    
+    # NOTE: not passing the tokenizer into judge_outputs because the batches attached to the iterator have been tokenized
+    judgments = judge_outputs(judge_model, accelerator, judgment_case_iterator, batch_size)
+    
     if accelerator.is_main_process:
         judgments = reorder_judgments(judgments, judgment_cases.order)
         return {
