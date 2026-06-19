@@ -74,7 +74,7 @@ lora_config = LoraConfig(
 # output_dir="qwen-1.5b-constitution-checkpoints"
 # output_dir=f"{MODEL_NAME}-constitution-checkpoints"
 
-num_train_epochs = 3
+num_train_epochs = 1
 
 # # Batch size per GPU for training
 # per_device_train_batch_size = 4
