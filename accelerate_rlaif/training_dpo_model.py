@@ -34,7 +34,7 @@ logging_steps = 5
 # Activate 4-bit precision base model loading
 use_4bit = True
 # Compute dtype for 4-bit base models
-bnb_4bit_compute_dtype = "float16"
+bnb_4bit_compute_dtype = "bfloat16"
 # Quantization type (fp4 or nf4)
 bnb_4bit_quant_type = "nf4"
 # Activate nested quantization for 4-bit base models (double quantization)
@@ -73,18 +73,18 @@ def train_with_dpo(dataset: Dataset,
         output_dir=checkpoint_dir,
         per_device_train_batch_size=batch_size,
         gradient_accumulation_steps=8,
-        num_train_epochs=8,
-        fp16=True,
-        bf16=False,
+        num_train_epochs=1,
+        bf16=True,
         save_strategy="no",
         max_length = 512,        
         logging_steps = logging_steps,
-
+        optim="adamw_8bit",
         # BROKEN BUT FIX! RuntimeError: expected scalar type Float but found Half
+        model_init_kwargs={"torch_dtype": "bfloat16"},
         # model_init_kwargs={"quantization_config": bnb_config},
 
         # NOTE: Gradient checkpointing should be enabled in the future
-        gradient_checkpointing=False,
+        gradient_checkpointing=True,
         
         # NOTE: Ideally, this would be the case
         # gradient_checkpointing=True,
@@ -94,11 +94,18 @@ def train_with_dpo(dataset: Dataset,
         report_to="tensorboard"
     )
 
+    hf_dataset = dataset.to_hf()
+    hf_dataset = hf_dataset.map(lambda x: {
+        "prompt": x["prompt"].rstrip() + "\n",
+        "chosen": x["chosen"].lstrip(),
+        "rejected": x["rejected"].lstrip(),
+    })
+
     dpo_trainer = DPOTrainer(
         model=input_model_path_or_name,
         args=dpo_config,
-        train_dataset=dataset.to_hf(),
-        peft_config=peft_config, # NOTE: setting the processing class here to use the reward tokenizer
+        train_dataset=hf_dataset,
+        #peft_config=peft_config, # NOTE: setting the processing class here to use the reward tokenizer
     )
     
     # grpo_trainer.model.quantization_config = bnb_config
@@ -123,7 +130,7 @@ def train_with_dpo(dataset: Dataset,
             json.dump(dpo_log, log_file, indent=4)
                 
     final_model = accelerator.unwrap_model(dpo_trainer.model)
-    final_model = final_model.merge_and_unload()
+ #   final_model = final_model.merge_and_unload()
     
     if accelerator.is_local_main_process: 
         # Save the final reward model
@@ -152,7 +159,8 @@ if __name__ == '__main__':
     dataset_path = config["dpo_dataset_train_file"]
     input_model_path_or_name = config["dpo_input_model"]
     output_model_path = config["dpo_model_path"]
-    batch_size = config["training_batch_size"]
+#    batch_size = config["training_batch_size"]
+    batch_size= 4
 
     dataset = DPODataset([],[],[])
     dataset.load(dataset_path)

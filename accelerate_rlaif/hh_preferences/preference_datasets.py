@@ -105,8 +105,6 @@ def tokenize_batch_element(element: Dict, tokenize_fields: List[str], truncation
     new_element = {}
     for field in tokenize_fields:
         tokenized_field = tokenizer(element[field], add_special_tokens=False)
-        tokenized_field['input_ids'].append(tokenizer.eos_token_id) #why are we appending an eos?
-        tokenized_field['attention_mask'].append(1)
 
         length = len(tokenized_field['input_ids'])
         if "prompt" in field:

@@ -22,7 +22,7 @@ CASE_REGIME = "constitution"
 # Activate 4-bit precision base model loading
 use_4bit = True
 # Compute dtype for 4-bit base models
-bnb_4bit_compute_dtype = "float16"
+bnb_4bit_compute_dtype = "bfloat16"
 # Quantization type (fp4 or nf4)
 bnb_4bit_quant_type = "nf4"
 # Activate nested quantization for 4-bit base models (double quantization)
@@ -89,7 +89,7 @@ if __name__ == "__main__":
         judge_model = AutoModelForCausalLM.from_pretrained(
                     judge_model_path_or_name,
                     torch_dtype=compute_dtype,
-                    quantization_config=bnb_config,
+            #        quantization_config=bnb_config,
                 )
     raw_prompts = [elem["prompt"] for elem in dataset]
     prompt_iterator = get_pytorch_iterator(dataset=dataset,
