@@ -1,0 +1,24 @@
+{
+    "aws": false,
+    "base_model": "hermes3b",
+    "constitution_path": "data/constitution_annotated.json",
+    "inference_batch_size": 2,
+    "quantization_bool": false,
+
+    "base_dataset": "hh",
+    "base_dataset_train_size": 1000,
+    "base_dataset_test_size": 100,
+    "base_dataset_train_file": "data/base_dataset_train.json",
+    "base_dataset_test_file": "data/base_dataset_test.json",
+
+    "sft_dataset_train_size": 1000,
+    "sft_dataset_test_size": 100,
+    "sft_dataset_train_file": "data/sft_dataset_train.json",
+    "sft_dataset_test_file": "data/sft_dataset_test.json",
+
+    "dpo_dataset_train_file": "data/dpo_dataset_train.json",
+    "dpo_dataset_test_file": "data/dpo_dataset_test.json",
+
+    "checkpointing_bool": true,
+    "checkpoint_dir": "checkpoints"
+}
