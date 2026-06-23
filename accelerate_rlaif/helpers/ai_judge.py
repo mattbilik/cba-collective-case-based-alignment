@@ -65,8 +65,8 @@ class JudgmentDataset(Dataset):
                 The answer is:
             """
             tokenized_prompt = self.tokenizer(prompt)
-            tokenized_A =self.tokenizer(" (A)")
-            tokenized_B =self.tokenizer(" (B)")
+            tokenized_A =self.tokenizer(" (A)", add_special_tokens=False)
+            tokenized_B =self.tokenizer(" (B)", add_special_tokens=False)
             prompt_with_A = {
                                 "prompt_input_ids": 
                                     tokenized_prompt["input_ids"]+
@@ -98,6 +98,7 @@ def generate_test_responses(model: AutoModelForCausalLM,
     
     # We are preparing the model and the iterator here for
     responses = []
+    order = []
     prompt_idx = 0
 
     for batch in tqdm(dataset, desc="Processing batches"):
@@ -110,12 +111,15 @@ def generate_test_responses(model: AutoModelForCausalLM,
                                            tokenizer
                                           )
         responses.extend(final_completion)
+        order.extend(batch["idx"])
     accelerator.wait_for_everyone()
     responses = gather_iterator_batches(responses,
                                         accelerator,
                                         dataset)
-
-    return responses
+    order = gather_iterator_batches(order,
+                                     accelerator,
+                                     dataset)
+    return responses, order
 
 #again, def duplicated logic
 def compute_log_probs(judge_model, accelerator, sequences, prompt_lengths):            
@@ -204,7 +208,7 @@ def generate_responses_and_judgments(response_model1, response_model2, judge_mod
     model = accelerator.prepare(response_model1)
     dataloader =  accelerator.prepare(dataloader)    
     accelerator.wait_for_everyone()
-    response_1s = generate_test_responses(model, tokenizer, accelerator, dataloader) 
+    response_1s, order1 = generate_test_responses(model, tokenizer, accelerator, dataloader) 
     
     accelerator.free_memory()
     del model
@@ -214,7 +218,11 @@ def generate_responses_and_judgments(response_model1, response_model2, judge_mod
     #prepare response_model2 for parallel inference and run on test set
     model = accelerator.prepare(response_model2)
     accelerator.wait_for_everyone()
-    response_2s = generate_test_responses(model, tokenizer, accelerator, dataloader)
+    response_2s, order2 = generate_test_responses(model, tokenizer, accelerator, dataloader)
+    raw_prompts_reordered1 = [raw_prompts[i] for i in order1]
+    raw_prompts_reordered2 = [raw_prompts[i] for i in order2]
+    for elem1, elem2 in zip(raw_prompts_reordered1, raw_prompts_reordered2):
+        assert(elem1 == elem2)
 
     accelerator.free_memory()
     del model
@@ -224,7 +232,7 @@ def generate_responses_and_judgments(response_model1, response_model2, judge_mod
     # Need a model that hasn't been wrapped by accelerate yet (?)
 
     # Create dataset of triples
-    judgment_cases = JudgmentDataset(raw_prompts, response_1s, response_2s, tokenizer, constitution)
+    judgment_cases = JudgmentDataset(raw_prompts_reordered1, response_1s, response_2s, tokenizer, constitution)
     judgment_collator = get_judgment_collate_fn(tokenizer)
     
     # Dividing batch_size by two here because judging cases seems a bit more mem intensive than generating responses?
