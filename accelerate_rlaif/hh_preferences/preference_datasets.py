@@ -27,12 +27,15 @@ class CAIPipelineDataset(torch.utils.data.Dataset):
 class CAIBasePairDataset(CAIPipelineDataset):
     def __init__(self, hh_json):
         self.entries = []
+        pos = 0
         for key, val in hh_json:
             entry = {}
             entry["prompt"] = key
             responses = val["responses"]
             entry["chosen"] = responses[0]
             entry["rejected"] = responses[1]
+            entry["idx"] = pos
+            pos += 1
             self.entries.append(entry)
 
     def __len__(self):
