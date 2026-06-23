@@ -83,6 +83,7 @@ def train_with_dpo(dataset: Dataset,
         save_strategy="no",
         max_length = 512,        
         logging_steps = logging_steps,
+        # The optimizer is quantized for 8-bit training
         optim="adamw_8bit",
         # BROKEN BUT FIX! RuntimeError: expected scalar type Float but found Half
         model_init_kwargs={"torch_dtype": "bfloat16"},

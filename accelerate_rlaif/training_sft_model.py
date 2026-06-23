@@ -170,7 +170,10 @@ def finetune_sft(accelerator: Accelerator,
         per_device_train_batch_size=1,
         gradient_accumulation_steps=8,
         gradient_checkpointing=True,
-        optim="paged_adamw_8bit",
+        
+        # The optimizer is quantized for 8-bit training
+        # Was initially using paged adam but not necessary
+        optim="adamw_8bit",
         bf16=True, # or bf16=True
         report_to="tensorboard",
         ddp_find_unused_parameters=False,
