@@ -394,6 +394,9 @@ if __name__ == "__main__":
     model_name = config["base_model"]
     constitution_file_path = config["constitution_path"]
     batch_size = config["inference_batch_size"]
+        
+    quantization_bool = config["quantization_bool"]
+    
     if mode == "train":
         num_completions = config["sft_dataset_train_size"]
         output_dataset_path = config["sft_dataset_train_file"]
@@ -413,10 +416,13 @@ if __name__ == "__main__":
         tokenizer = AutoTokenizer.from_pretrained(model_name,
                                                   padding_side='left')
         tokenizer.pad_token_id = tokenizer.eos_token_id
+        
+        # Quantizing the model for generation of completions and revisions is
+        # not the greatest because it reduces the quality of revisions
         model = AutoModelForCausalLM.from_pretrained(
                     model_name,
                     dtype=compute_dtype,
-                    #quantization_config=bnb_config,
+                    quantization_config=bnb_config if quantization_bool else None,
                 )
 
     transform_and_write_base_dataset(input_dataset_path,

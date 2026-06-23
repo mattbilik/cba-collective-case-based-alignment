@@ -128,12 +128,13 @@ def finetune_sft(accelerator: Accelerator,
                  dataset: Dataset,
                  checkpoint_dir: str,
                  checkpointing_bool: bool,
+                 quantization_bool: bool = False,
                  model_name: str = MODEL_NAME,
                  final_model_path: str = None):
         
     model = AutoModelForCausalLM.from_pretrained(
         model_name,
- #       quantization_config=bnb_config,
+        quantization_config=bnb_config if quantization_bool else None,
         dtype=compute_dtype,
     )
     
@@ -185,7 +186,8 @@ def finetune_sft(accelerator: Accelerator,
     sft_trainer = SFTTrainer(
         model=model,
         train_dataset=dataset,
- #       peft_config=lora_config,
+        peft_config=lora_config if quantization_bool else None,
+ #      peft_config=lora_config,
         args=sft_config,
     )
     
@@ -234,6 +236,7 @@ def finetune_sft(accelerator: Accelerator,
     final_model.save_pretrained(final_model_path)
     tokenizer = sft_trainer.processing_class  # or however you have the tokenizer referenced
     tokenizer.save_pretrained(final_model_path)    
+    
 if __name__ == "__main__":
     
     accelerator = Accelerator()
@@ -260,6 +263,8 @@ if __name__ == "__main__":
     model_path_or_name = config["base_model"]
     dataset_path = config["sft_dataset_train_file"]
     output_model_path = config["sft_model_path"]
+    
+    quantization_bool = config["quantization_bool"]
 
     dataset = SFTDataset([],[],[])
     if aws:
@@ -270,6 +275,7 @@ if __name__ == "__main__":
                  dataset,
                  checkpoint_dir,
                  checkpointing_bool,
+                 quantization_bool=quantization_bool,
                  model_name=model_path_or_name,
                  final_model_path=output_model_path)
     
