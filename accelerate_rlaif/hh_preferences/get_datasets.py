@@ -177,8 +177,8 @@ def get_hh(split: str, silent: bool = False, cache_dir: str = None) -> Dict[str,
        For this dataset, the sft_target is just the chosen response.
     """
     print(f'Loading HH dataset ({split} split) from Huggingface...')
-    dataset = datasets.load_dataset('Anthropic/hh-rlhf', split=split, cache_dir=cache_dir, data_dir='helpful-base')
-    print('done')
+    dataset = datasets.load_dataset('Anthropic/hh-rlhf', split=split, cache_dir=cache_dir)
+    dataset = dataset.shuffle(seed=42)
 
     def split_prompt_and_responses(ex):
         prompt = extract_anthropic_prompt(ex['chosen'])
