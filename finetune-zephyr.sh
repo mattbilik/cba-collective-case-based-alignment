@@ -27,3 +27,13 @@ CONFIG="config.json"
 echo "------------------------------------"
 echo "testing with win rate (log prob) against baseline"
 accelerate launch --multi_gpu --num_processes $NUM_GPUS accelerate_rlaif/win_rate_vs_baseline.py $CONFIG dpo
+
+accelerate launch -m lm_eval --model hf \
+    --model_args pretrained=models/sft_model,tokenizer=Qwen/Qwen3-0.6B \
+    --tasks mmlu,bbq,gsm8k \
+    --batch_size 16
+
+accelerate launch -m lm_eval --model hf \
+    --model_args pretrained=models/dpo_model,tokenizer=Qwen/Qwen3-0.6B \
+    --tasks mmlu,bbq,gsm8k \
+    --batch_size 16

@@ -10,8 +10,10 @@
 #SBATCH -o log/%x_%j.out
 
 srun apptainer exec --nv \
-  --bind accelerate_rlaif_new/:/rlaif \
-  container_gpu.sif \
+  --bind accelerate_rlaif_06_23/:/rlaif \
+  container.sif \
   bash -c "
     cd /rlaif
-    ./finetune.sh
+    pip install boto3
+    pip install torchdata
+    ./finetune-hermes.sh
