@@ -190,7 +190,6 @@ def revise_responses_on_constitution(batch_prompts,
        
     responses_to_revise = initial_completions
     
-    
     """
     User: lorem ipsum
     Assistant: lore ipsum
@@ -269,17 +268,21 @@ def run_generation(prompt_iterator,
         initials.extend(initial)
         reviseds.extend(revised)
         
-        if prompt_idx % 10 == 0 and checkpointing_bool:
-            dataloader_state = prompt_iterator.state_dict()
-            torch.save(dataloader_state, iterator_checkpoint_path)
+        # NOTE: if we actually wanted to implement this, we would need
+        # to save the iterator state and give it back to each of the respective GPUs
+        
+        if accelerator.is_local_main_process:
+            if prompt_idx % 10 == 0 and checkpointing_bool:
+                dataloader_state = prompt_iterator.state_dict()
+                torch.save(dataloader_state, iterator_checkpoint_path)
 
-            with open(data_checkpoint_path, "wb") as f:
-                json.dump({
-                    'prompts': prompts,
-                    'initials': initials,
-                    'reviseds': reviseds,
-                    'index': prompt_idx
-                }, f, ensure_ascii=False, indent=4)
+                with open(data_checkpoint_path, "wb") as f:
+                    json.dump({
+                        'prompts': prompts,
+                        'initials': initials,
+                        'reviseds': reviseds,
+                        'index': prompt_idx
+                    }, f, ensure_ascii=False, indent=4)
         
         print(f"Accelerator device: {accelerator.device}, prompts length {len(prompts)}, initials length {len(initials)}, reviseds length {len(reviseds)}")
     
@@ -394,6 +397,9 @@ if __name__ == "__main__":
     model_name = config["base_model"]
     constitution_file_path = config["constitution_path"]
     batch_size = config["inference_batch_size"]
+        
+    quantization_bool = config["quantization_bool"]
+    
     if mode == "train":
         num_completions = config["sft_dataset_train_size"]
         output_dataset_path = config["sft_dataset_train_file"]
@@ -413,10 +419,13 @@ if __name__ == "__main__":
         tokenizer = AutoTokenizer.from_pretrained(model_name,
                                                   padding_side='left')
         tokenizer.pad_token_id = tokenizer.eos_token_id
+        
+        # Quantizing the model for generation of completions and revisions is
+        # not the greatest because it reduces the quality of revisions
         model = AutoModelForCausalLM.from_pretrained(
                     model_name,
                     dtype=compute_dtype,
-                    #quantization_config=bnb_config,
+                    quantization_config=bnb_config if quantization_bool else None,
                 )
 
     transform_and_write_base_dataset(input_dataset_path,

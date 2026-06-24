@@ -32,7 +32,11 @@ logging_steps = 5
 # NOTE: Not able to use bf16 because we're using NVIDIA 2080 GPUs
 
 # Activate 4-bit precision base model loading
-use_4bit = True
+# use_4bit = True
+
+# Activating 8-bit precision
+use_8bit = True
+
 # Compute dtype for 4-bit base models
 bnb_4bit_compute_dtype = "bfloat16"
 # Quantization type (fp4 or nf4)
@@ -44,10 +48,11 @@ compute_dtype = getattr(torch, bnb_4bit_compute_dtype)
 
 # Fine-tuning on self-revised responses from HH dataset with our constitution
 bnb_config = BitsAndBytesConfig(
-    load_in_4bit=use_4bit,
-    bnb_4bit_quant_type=bnb_4bit_quant_type,
-    bnb_4bit_compute_dtype=compute_dtype,
-    bnb_4bit_use_double_quant=use_nested_quant,
+    # load_in_4bit=use_4bit,
+    load_in_8bit=use_8bit,
+    # bnb_4bit_quant_type=bnb_4bit_quant_type,
+    # bnb_4bit_compute_dtype=compute_dtype,
+    # bnb_4bit_use_double_quant=use_nested_quant,
 )
 
 def train_with_dpo(dataset: Dataset,
@@ -56,6 +61,7 @@ def train_with_dpo(dataset: Dataset,
                    output_model_path: str, 
                    checkpoint_dir: str,
                    checkpointing_bool: bool,
+                   quantization_bool: bool = False,
                    batch_size: int = 2):
     
     final_model_path = os.path.abspath(output_model_path)
@@ -78,9 +84,11 @@ def train_with_dpo(dataset: Dataset,
         save_strategy="no",
         max_length = 512,        
         logging_steps = logging_steps,
+        # The optimizer is quantized for 8-bit training
         optim="adamw_8bit",
         # BROKEN BUT FIX! RuntimeError: expected scalar type Float but found Half
-        model_init_kwargs={"torch_dtype": "bfloat16"},
+        # model_init_kwargs={"torch_dtype": "bfloat16"},
+        model_init_kwargs={"quantization_config": bnb_config, "torch_dtype": "bfloat16"} if quantization_bool else {"torch_dtype": "bfloat16"},
         # model_init_kwargs={"quantization_config": bnb_config},
 
         # NOTE: Gradient checkpointing should be enabled in the future
@@ -105,6 +113,7 @@ def train_with_dpo(dataset: Dataset,
         model=input_model_path_or_name,
         args=dpo_config,
         train_dataset=hf_dataset,
+        peft_config=peft_config if quantization_bool else None,
         #peft_config=peft_config, # NOTE: setting the processing class here to use the reward tokenizer
     )
     
@@ -159,8 +168,10 @@ if __name__ == '__main__':
     dataset_path = config["dpo_dataset_train_file"]
     input_model_path_or_name = config["dpo_input_model"]
     output_model_path = config["dpo_model_path"]
-#    batch_size = config["training_batch_size"]
+#   batch_size = config["training_batch_size"]
     batch_size= 4
+    
+    quantization_bool = config["quantization_bool"]
 
     dataset = DPODataset([],[],[])
     dataset.load(dataset_path)
@@ -171,6 +182,7 @@ if __name__ == '__main__':
                    output_model_path,
                    checkpoint_dir,
                    checkpointing_bool,
+                   quantization_bool,
                    batch_size)
 
     if accelerator.is_local_main_process:

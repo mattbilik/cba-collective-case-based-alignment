@@ -31,7 +31,11 @@ MODEL_NAME = "Qwen/Qwen2-1.5B"
 # NOTE: Not able to use bf16 because we're using NVIDIA 2080 GPUs
 
 # Activate 4-bit precision base model loading
-use_4bit = True
+# use_4bit = True
+
+# Activating 8-bit precision
+use_8bit = True
+
 # Compute dtype for 4-bit base models
 bnb_4bit_compute_dtype = "bfloat16"
 # Quantization type (fp4 or nf4)
@@ -43,10 +47,11 @@ compute_dtype = getattr(torch, bnb_4bit_compute_dtype)
 
 # Fine-tuning on self-revised responses from HH dataset with our constitution
 bnb_config = BitsAndBytesConfig(
-    load_in_4bit=use_4bit,
-    bnb_4bit_quant_type=bnb_4bit_quant_type,
-    bnb_4bit_compute_dtype=compute_dtype,
-    bnb_4bit_use_double_quant=use_nested_quant,
+    # load_in_4bit=use_4bit,
+    load_in_8bit=use_8bit,
+    # bnb_4bit_quant_type=bnb_4bit_quant_type,
+    # bnb_4bit_compute_dtype=compute_dtype,
+    # bnb_4bit_use_double_quant=use_nested_quant,
 )
 
 # --------------- Quantized LoRA (QLoRA) Model Setup -----------------
@@ -123,12 +128,13 @@ def finetune_sft(accelerator: Accelerator,
                  dataset: Dataset,
                  checkpoint_dir: str,
                  checkpointing_bool: bool,
+                 quantization_bool: bool = False,
                  model_name: str = MODEL_NAME,
                  final_model_path: str = None):
         
     model = AutoModelForCausalLM.from_pretrained(
         model_name,
- #       quantization_config=bnb_config,
+        quantization_config=bnb_config if quantization_bool else None,
         dtype=compute_dtype,
     )
     
@@ -165,7 +171,10 @@ def finetune_sft(accelerator: Accelerator,
         per_device_train_batch_size=1,
         gradient_accumulation_steps=8,
         gradient_checkpointing=True,
-        optim="paged_adamw_8bit",
+        
+        # The optimizer is quantized for 8-bit training
+        # Was initially using paged adam but not necessary
+        optim="adamw_8bit",
         bf16=True, # or bf16=True
         report_to="tensorboard",
         ddp_find_unused_parameters=False,
@@ -177,7 +186,8 @@ def finetune_sft(accelerator: Accelerator,
     sft_trainer = SFTTrainer(
         model=model,
         train_dataset=dataset,
- #       peft_config=lora_config,
+        peft_config=lora_config if quantization_bool else None,
+ #      peft_config=lora_config,
         args=sft_config,
     )
     
@@ -226,6 +236,7 @@ def finetune_sft(accelerator: Accelerator,
     final_model.save_pretrained(final_model_path)
     tokenizer = sft_trainer.processing_class  # or however you have the tokenizer referenced
     tokenizer.save_pretrained(final_model_path)    
+    
 if __name__ == "__main__":
     
     accelerator = Accelerator()
@@ -252,6 +263,8 @@ if __name__ == "__main__":
     model_path_or_name = config["base_model"]
     dataset_path = config["sft_dataset_train_file"]
     output_model_path = config["sft_model_path"]
+    
+    quantization_bool = config["quantization_bool"]
 
     dataset = SFTDataset([],[],[])
     if aws:
@@ -262,6 +275,7 @@ if __name__ == "__main__":
                  dataset,
                  checkpoint_dir,
                  checkpointing_bool,
+                 quantization_bool=quantization_bool,
                  model_name=model_path_or_name,
                  final_model_path=output_model_path)
     

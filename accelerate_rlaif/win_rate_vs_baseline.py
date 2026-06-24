@@ -20,7 +20,11 @@ CASE_REGIME = "constitution"
 # NOTE: Not able to use bf16 because we're using NVIDIA 2080 GPUs
 
 # Activate 4-bit precision base model loading
-use_4bit = True
+# use_4bit = True
+
+# Activating 8-bit precision
+use_8bit = True
+
 # Compute dtype for 4-bit base models
 bnb_4bit_compute_dtype = "bfloat16"
 # Quantization type (fp4 or nf4)
@@ -32,10 +36,11 @@ compute_dtype = getattr(torch, bnb_4bit_compute_dtype)
 
 # Fine-tuning on self-revised responses from HH dataset with our constitution
 bnb_config = BitsAndBytesConfig(
-    load_in_4bit=use_4bit,
-    bnb_4bit_quant_type=bnb_4bit_quant_type,
-    bnb_4bit_compute_dtype=compute_dtype,
-    bnb_4bit_use_double_quant=use_nested_quant,
+    # load_in_4bit=use_4bit,
+    load_in_8bit=use_8bit,
+    # bnb_4bit_quant_type=bnb_4bit_quant_type,
+    # bnb_4bit_compute_dtype=compute_dtype,
+    # bnb_4bit_use_double_quant=use_nested_quant,
 )
 
 if __name__ == "__main__":
@@ -86,6 +91,7 @@ if __name__ == "__main__":
                     quantization_config=bnb_config,
                 )
 
+        # NOTE: not quantizing the judge model for eval purposes
         judge_model = AutoModelForCausalLM.from_pretrained(
                     judge_model_path_or_name,
                     torch_dtype=compute_dtype,
