@@ -387,9 +387,13 @@ if __name__ == "__main__":
 
     mode = sys.argv[2]
     aws = config["aws"]
+    
     if aws:
         bucket = config["s3"]
         s3_client = boto3.client('s3')
+    else:
+        bucket = None
+        s3_client = None
     
     checkpointing_bool = config["checkpointing_bool"]
     checkpoint_dir = config["checkpoint_dir"]
