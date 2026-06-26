@@ -78,7 +78,8 @@ def train_with_dpo(dataset: Dataset,
     dpo_config = DPOConfig(
         output_dir=checkpoint_dir,
         per_device_train_batch_size=batch_size,
-        gradient_accumulation_steps=8,
+        # gradient_accumulation_steps=8,
+        gradient_accumulation_steps=4,
         num_train_epochs=1,
         bf16=True,
         save_strategy="no",
@@ -168,8 +169,9 @@ if __name__ == '__main__':
     dataset_path = config["dpo_dataset_train_file"]
     input_model_path_or_name = config["dpo_input_model"]
     output_model_path = config["dpo_model_path"]
-#   batch_size = config["training_batch_size"]
-    batch_size= 4
+    # batch_size = config["training_batch_size"]
+    # Smaller batch size for DPO    
+    batch_size = 1
     
     quantization_bool = config["quantization_bool"]
 

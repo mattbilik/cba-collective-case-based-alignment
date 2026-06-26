@@ -1,11 +1,11 @@
 #!/bin/bash
 
-#SBATCH --job-name=grpo_cai
-#SBATCH --partition=gpu-2080ti
-#SBATCH --gpus-per-node=2080ti:8
+#SBATCH --job-name=sft_dpo_cai
+#SBATCH --partition=gpu-l40s
+#SBATCH --gpus-per-node=l40s:4
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
-#SBATCH --mem=80G
+#SBATCH --mem=100G
 #SBATCH --time=3:00:00
 #SBATCH -o log/%x_%j.out
 
@@ -17,3 +17,4 @@ srun apptainer exec --nv \
     pip install boto3
     pip install torchdata
     ./finetune-hermes.sh
+  "
