@@ -236,20 +236,20 @@ def run_generation(prompt_iterator,
     prompt_idx = 0
     
     # Updating the iterator to resume from the last checkpoint
-    iterator_checkpoint_path = os.path.join(checkpoint_dir, "sft_dataloader_state.pt")
-    data_checkpoint_path = os.path.join(checkpoint_dir, "sft_checkpoint.json")
+    # iterator_checkpoint_path = os.path.join(checkpoint_dir, "sft_dataloader_state.pt")
+    # data_checkpoint_path = os.path.join(checkpoint_dir, "sft_checkpoint.json")
     
-    if checkpointing_bool and os.path.exists(iterator_checkpoint_path) and os.path.exists(data_checkpoint_path):
-        prompt_iterator.load(torch.load(iterator_checkpoint_path))
+    # if checkpointing_bool and os.path.exists(iterator_checkpoint_path) and os.path.exists(data_checkpoint_path):
+    #     prompt_iterator.load(torch.load(iterator_checkpoint_path))
         
-        with open(data_checkpoint_path, "rb") as f:
-            checkpoint_data = json.load(f)
+    #     with open(data_checkpoint_path, "rb") as f:
+    #         checkpoint_data = json.load(f)
             
-            prompt_idx = checkpoint_data['index']
+    #         prompt_idx = checkpoint_data['index']
             
-            prompts = checkpoint_data['prompts']
-            initials = checkpoint_data['initials']
-            reviseds = checkpoint_data['reviseds']
+    #         prompts = checkpoint_data['prompts']
+    #         initials = checkpoint_data['initials']
+    #         reviseds = checkpoint_data['reviseds']
     
     # if not os.path.exists(iterator_checkpoint_path) or not os.path.exists(data_checkpoint_path):
     for batch in tqdm(prompt_iterator, desc="Processing batches"):
@@ -271,18 +271,18 @@ def run_generation(prompt_iterator,
         # NOTE: if we actually wanted to implement this, we would need
         # to save the iterator state and give it back to each of the respective GPUs
         
-        if accelerator.is_local_main_process:
-            if prompt_idx % 10 == 0 and checkpointing_bool:
-                dataloader_state = prompt_iterator.state_dict()
-                torch.save(dataloader_state, iterator_checkpoint_path)
+        # if accelerator.is_local_main_process:
+        #     if prompt_idx % 10 == 0 and checkpointing_bool:
+        #         dataloader_state = prompt_iterator.state_dict()
+        #         torch.save(dataloader_state, iterator_checkpoint_path)
 
-                with open(data_checkpoint_path, "wb") as f:
-                    json.dump({
-                        'prompts': prompts,
-                        'initials': initials,
-                        'reviseds': reviseds,
-                        'index': prompt_idx
-                    }, f, ensure_ascii=False, indent=4)
+        #         with open(data_checkpoint_path, "wb") as f:
+        #             json.dump({
+        #                 'prompts': prompts,
+        #                 'initials': initials,
+        #                 'reviseds': reviseds,
+        #                 'index': prompt_idx
+        #             }, f, ensure_ascii=False, indent=4)
         
         print(f"Accelerator device: {accelerator.device}, prompts length {len(prompts)}, initials length {len(initials)}, reviseds length {len(reviseds)}")
     

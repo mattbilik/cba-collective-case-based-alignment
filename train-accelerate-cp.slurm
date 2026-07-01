@@ -7,6 +7,7 @@
 #SBATCH --ntasks-per-node=1
 #SBATCH --mem=100G
 #SBATCH --time=5:00:00
+#SBATCH --requeue
 #SBATCH -o log/%x_%j.out
 
 srun apptainer exec --nv \
