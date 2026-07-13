@@ -47,6 +47,8 @@ if __name__ == "__main__":
 
     config = sys.argv[1]
     final_model = sys.argv[2]
+    bedrock = bool(int(sys.argv[2]))
+
 
     with open(config) as f:
         config = json.load(f)
@@ -104,7 +106,7 @@ if __name__ == "__main__":
                                             batch_size = batch_size,
                     )
             
-    judgments = generate_responses_and_judgments(trained_model, baseline_model, judge_model, accelerator, tokenizer, constitution, prompt_iterator, raw_prompts, batch_size=batch_size)
+    judgments = generate_responses_and_judgments(trained_model, baseline_model, judge_model, accelerator, tokenizer, constitution, prompt_iterator, raw_prompts, batch_size=batch_size, bedrock=bedrock)
     if accelerator.is_main_process:
         #shooould be win rate?
         print("Win rate", (judgments["judgments"] > 0.5).sum() / judgments["judgments"].shape[0])

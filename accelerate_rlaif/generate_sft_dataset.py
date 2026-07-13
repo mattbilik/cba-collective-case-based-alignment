@@ -2,6 +2,7 @@ import os
 import json
 import random
 import sys
+from helpers.bedrock import query_bedrock
 from hh_preferences.preference_datasets import get_pytorch_iterator, CAIPipelineDataset, CAIBasePairDataset, transform_and_write_base_dataset
 from torch.utils.data import DataLoader
 from hh_preferences.utils import prompt_from_hh_anthropic
@@ -11,11 +12,15 @@ from sentence_transformers import SentenceTransformer
 import torch
 from datasets import Dataset
 import torch.distributed as dist
+import subprocess
 import boto3
 
 from helpers.model_funcs import get_completions
 from helpers.accelerate_funcs import gather_iterator_batches
 from tqdm import tqdm
+
+AWS_PROFILE        = os.getenv('AWS_PROFILE')
+AWS_REGION         = os.getenv('AWS_REGION', 'us-east-1')
 
 CASE_REGIME = "constitution"
 
@@ -66,7 +71,6 @@ class SFTDataset(CAIPipelineDataset):
             self.entries = json.load(f)
     def to_hf(self):
         return Dataset.from_list(self.entries)
-
 
 def get_all_turns_and_format(dialogue: str) -> list[str, str]:
     
@@ -156,6 +160,60 @@ def tokenize_revision_request(batch_prompts,
 
     return revision_requests
 
+
+def revise_responses_on_constitution_bedrock(batch_prompts,
+                                     model,
+                                     tokenizer,
+                                     accelerator,
+                                     constitution,
+                                     number_of_revisions=1) -> str:
+    """
+    Revises a given harmfulness_prompt response according to the constitutional principles.
+    Args:
+        constitution (dict): The constitution containing principles for revision.
+        batch: The prompt (multi-turn) to be revised.
+        number_of_revisions (int): Number of revision iterations to perform.
+    Returns:
+        str: The revised response after applying the constitution principles.
+    """
+    
+    batch_prompts = batch_prompts['prompt']
+
+    # Get initial completions for the batch of prompts
+    revision_instructions = random.choice(constitution['principles'])
+    random_principle = revision_instructions['revise']
+        
+    tokenized_batch_prompts = tokenize_chat_history(batch_prompts, tokenizer)
+    
+    input_ids = tokenized_batch_prompts['input_ids']
+    attention_mask = tokenized_batch_prompts['attention_mask']
+    
+    initial_completions = get_completions(
+        input_ids, attention_mask, model, accelerator, tokenizer
+    )
+       
+    responses_to_revise = initial_completions
+    
+    """
+    User: lorem ipsum
+    Assistant: lore ipsum
+    User: lorem ipsum
+        
+    Call initial completion, get:
+    Assistant: ... initial completion
+            
+    """
+        
+    reviseds = []
+    for i, batch_prompt in enumerate(batch_prompts):        
+        batch_response = batch_responses[i]
+        revision_request = f"""The following is an original response to a user prompt, followed by a revision instruction.\nPlease revise the original response according to the revision instruction and output ONLY your revised response (which must answer the question in the prompt history) as plain text. DO NOT mention the revision instruction in your response. \nUser prompt history: {batch_prompt}\nOriginal response: {batch_response}\nRevision principle: {principle}\nRevised response:"""
+        revised = query_bedrock(revision_request)        
+        reviseds.append(revised)
+
+    return initial_completions, reviseds
+
+
 # NOTE: this function can now handle batches!
 def revise_responses_on_constitution(batch_prompts,
                                      model,
@@ -229,61 +287,32 @@ def run_generation(prompt_iterator,
                    accelerator, 
                    constitution, 
                    checkpoint_dir, 
-                   checkpointing_bool):
+                   checkpointing_bool,
+                   bedrock = False):
     prompts = []
     initials = []
     reviseds = []
     prompt_idx = 0
-    
-    # Updating the iterator to resume from the last checkpoint
-    # iterator_checkpoint_path = os.path.join(checkpoint_dir, "sft_dataloader_state.pt")
-    # data_checkpoint_path = os.path.join(checkpoint_dir, "sft_checkpoint.json")
-    
-    # if checkpointing_bool and os.path.exists(iterator_checkpoint_path) and os.path.exists(data_checkpoint_path):
-    #     prompt_iterator.load(torch.load(iterator_checkpoint_path))
         
-    #     with open(data_checkpoint_path, "rb") as f:
-    #         checkpoint_data = json.load(f)
-            
-    #         prompt_idx = checkpoint_data['index']
-            
-    #         prompts = checkpoint_data['prompts']
-    #         initials = checkpoint_data['initials']
-    #         reviseds = checkpoint_data['reviseds']
-    
     # if not os.path.exists(iterator_checkpoint_path) or not os.path.exists(data_checkpoint_path):
     for batch in tqdm(prompt_iterator, desc="Processing batches"):
         prompt_idx += 1
         
         # Revising initial responses once according to our constitutional principles to get SFT data
-        initial, revised = revise_responses_on_constitution(batch,
-            model, tokenizer, accelerator, constitution, number_of_revisions=1)
-        
-        # final_completion = accelerator.gather_for_metrics(final_completion)
-        
+        if bedrock:
+            initial, revised = revise_responses_on_constitution_bedrock(batch,
+                tokenizer, accelerator, constitution)
+        else:
+            initial, revised = revise_responses_on_constitution(batch,
+                model, tokenizer, accelerator, constitution, number_of_revisions=1)
+
         # NOTE: implementing checkpointing logic here, save revised responses
         # after every 10 or so batches            
         
         prompts.extend(batch["prompt"])
         initials.extend(initial)
         reviseds.extend(revised)
-        
-        # NOTE: if we actually wanted to implement this, we would need
-        # to save the iterator state and give it back to each of the respective GPUs
-        
-        # if accelerator.is_local_main_process:
-        #     if prompt_idx % 10 == 0 and checkpointing_bool:
-        #         dataloader_state = prompt_iterator.state_dict()
-        #         torch.save(dataloader_state, iterator_checkpoint_path)
-
-        #         with open(data_checkpoint_path, "wb") as f:
-        #             json.dump({
-        #                 'prompts': prompts,
-        #                 'initials': initials,
-        #                 'reviseds': reviseds,
-        #                 'index': prompt_idx
-        #             }, f, ensure_ascii=False, indent=4)
-        
+                
         print(f"Accelerator device: {accelerator.device}, prompts length {len(prompts)}, initials length {len(initials)}, reviseds length {len(reviseds)}")
     
     accelerator.wait_for_everyone()
@@ -297,18 +326,6 @@ def run_generation(prompt_iterator,
     reviseds = gather_iterator_batches(reviseds,
                                         accelerator,
                                         prompt_iterator)
-    # else:
-    #     prompt_iterator.load(torch.load(iterator_checkpoint_path))
-        
-    #     pass
-        
-        # print(f"Length of prompts: {len(prompts)}")
-        # print(f"Length of initials: {len(initials)}")
-        # print(f"Length of revisions: {len(reviseds)}")
-
-        # print(f"Sample prompt: {prompts[:5]}")
-        # print(f"Sample initial: {initials[:5]}")
-        # print(f"Sample revision: {reviseds[:5]}")
 
     return prompts, initials, reviseds
 
@@ -320,7 +337,8 @@ def create_sft_dataset(model: AutoModelForCausalLM,
                      batch_size: int,
                      num_completions: int,
                      checkpoint_dir: str,
-                     checkpointing_bool: bool
+                     checkpointing_bool: bool,
+                     bedrock: bool
                      ) -> SFTDataset:
     
 
@@ -365,7 +383,8 @@ def create_sft_dataset(model: AutoModelForCausalLM,
                                                   accelerator, 
                                                   constitution, 
                                                   checkpoint_dir,
-                                                  checkpointing_bool)     
+                                                  checkpointing_bool,
+                                                  bedrock)     
     
     if accelerator.is_main_process:
         # print(f"Length of prompts: {len(prompts)}")
@@ -386,6 +405,7 @@ if __name__ == "__main__":
         config = json.load(f)
 
     mode = sys.argv[2]
+    bedrock = bool(int(sys.argv[3]))
     aws = config["aws"]
     
     if aws:
@@ -442,7 +462,8 @@ if __name__ == "__main__":
                                                                         batch_size,
                                                                         num_completions,
                                                                         checkpoint_dir,
-                                                                        checkpointing_bool
+                                                                        checkpointing_bool,
+                                                                        bedrock
                                                                         ),
                                      accelerator,
                                      s3_client,

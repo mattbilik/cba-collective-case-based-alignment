@@ -106,6 +106,8 @@ def tokenize_batch_element(element: Dict, tokenize_fields: List[str], truncation
          prompt tokens.
     """
     new_element = {}
+    for key in element.keys():
+        new_element[key] = element[key]
     for field in tokenize_fields:
         tokenized_field = tokenizer(element[field], add_special_tokens=False)
 
