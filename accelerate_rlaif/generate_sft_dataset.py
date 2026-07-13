@@ -206,11 +206,10 @@ def revise_responses_on_constitution_bedrock(batch_prompts,
         
     reviseds = []
     for i, batch_prompt in enumerate(batch_prompts):        
-        batch_response = batch_responses[i]
-        revision_request = f"""The following is an original response to a user prompt, followed by a revision instruction.\nPlease revise the original response according to the revision instruction and output ONLY your revised response (which must answer the question in the prompt history) as plain text. DO NOT mention the revision instruction in your response. \nUser prompt history: {batch_prompt}\nOriginal response: {batch_response}\nRevision principle: {principle}\nRevised response:"""
+        batch_response = initial_completions[i]
+        revision_request = f"""The following is an original response to a user prompt, followed by a revision instruction.\nPlease revise the original response according to the revision instruction and output ONLY your revised response (which must answer the question in the prompt history) as plain text. DO NOT mention the revision instruction in your response. \nUser prompt history: {batch_prompt}\nOriginal response: {batch_response}\nRevision principle: {random_principle}\nRevised response:"""
         revised = query_bedrock(revision_request)        
         reviseds.append(revised)
-
     return initial_completions, reviseds
 
 
@@ -300,7 +299,7 @@ def run_generation(prompt_iterator,
         
         # Revising initial responses once according to our constitutional principles to get SFT data
         if bedrock:
-            initial, revised = revise_responses_on_constitution_bedrock(batch,
+            initial, revised = revise_responses_on_constitution_bedrock(batch, model,
                 tokenizer, accelerator, constitution)
         else:
             initial, revised = revise_responses_on_constitution(batch,
