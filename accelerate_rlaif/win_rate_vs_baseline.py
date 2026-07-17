@@ -12,7 +12,7 @@ import torch
 from torch.utils.data import Dataset, DataLoader
 
 from helpers.model_funcs import get_completions
-from helpers.ai_judge import generate_responses_and_judgments
+from helpers.ai_judge import generate_responses_and_judgments, judgments_only
 
 CASE_REGIME = "constitution"
 
@@ -47,7 +47,7 @@ if __name__ == "__main__":
 
     config = sys.argv[1]
     final_model = sys.argv[2]
-    bedrock = bool(int(sys.argv[2]))
+    bedrock = bool(int(sys.argv[3]))
 
 
     with open(config) as f:
@@ -63,13 +63,13 @@ if __name__ == "__main__":
     baseline_model_path_or_name = config["base_model"]
     judge_model_path_or_name = config["base_model"]
     constitution_path = config["constitution_path"]
-    dataset_path = config["base_dataset_test_file"]
+    dataset_path = config["sft_dataset_test_file"]
     batch_size=config["inference_batch_size"]
     accelerator = Accelerator()
     
     dataset = CAIBasePairDataset([])
     dataset.load(dataset_path)
-    
+    judge_model = None
     with open(constitution_path) as f:
         constitution = json.load(f)
 
@@ -77,7 +77,7 @@ if __name__ == "__main__":
     with accelerator.main_process_first():
 
         tokenizer = AutoTokenizer.from_pretrained(trained_model_path,
-                                                    padding_side='left')
+                                                   padding_side='left')
         
         tokenizer.pad_token_id = tokenizer.eos_token_id
 
@@ -85,7 +85,7 @@ if __name__ == "__main__":
                     trained_model_path,
                     torch_dtype=compute_dtype,
                     quantization_config=bnb_config,
-                )
+               )
 
         baseline_model = AutoModelForCausalLM.from_pretrained(
                     baseline_model_path_or_name,
@@ -94,18 +94,18 @@ if __name__ == "__main__":
                 )
 
         # NOTE: not quantizing the judge model for eval purposes
-        judge_model = AutoModelForCausalLM.from_pretrained(
-                    judge_model_path_or_name,
-                    torch_dtype=compute_dtype,
-            #        quantization_config=bnb_config,
-                )
+        if not bedrock:
+            judge_model = AutoModelForCausalLM.from_pretrained(
+                         judge_model_path_or_name,
+                        torch_dtype=compute_dtype,
+                        quantization_config=bnb_config,
+                    )
     raw_prompts = [elem["prompt"] for elem in dataset]
     prompt_iterator = get_pytorch_iterator(dataset=dataset,
                                             tokenizer = tokenizer,
                                             tokenize_fields = ["prompt"],
                                             batch_size = batch_size,
                     )
-            
     judgments = generate_responses_and_judgments(trained_model, baseline_model, judge_model, accelerator, tokenizer, constitution, prompt_iterator, raw_prompts, batch_size=batch_size, bedrock=bedrock)
     if accelerator.is_main_process:
         #shooould be win rate?
