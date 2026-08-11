@@ -2,6 +2,7 @@ import torch
 import sys
 from peft import LoraConfig, TaskType
 from transformers import AutoModelForSequenceClassification, AutoTokenizer, PretrainedConfig, BitsAndBytesConfig
+from transformers.trainer_utils import get_last_checkpoint
 from trl import DPOTrainer, DPOConfig
 from generate_dpo_dataset import DPODataset
 from datasets import Dataset
@@ -83,7 +84,9 @@ def train_with_dpo(dataset: Dataset,
         gradient_accumulation_steps=4,
         num_train_epochs=1,
         bf16=True,
-        save_strategy="no",
+        save_strategy="steps",
+        save_steps=50,
+        save_total_limit=1,
         max_length = 512,        
         logging_steps = logging_steps,
         # The optimizer is quantized for 8-bit training
@@ -92,7 +95,7 @@ def train_with_dpo(dataset: Dataset,
         gradient_checkpointing_kwargs={"use_reentrant": False},
         # BROKEN BUT FIX! RuntimeError: expected scalar type Float but found Half
         # model_init_kwargs={"torch_dtype": "bfloat16"},
-        model_init_kwargs={"quantization_config": bnb_config, "torch_dtype": "bfloat16"} if quantization_bool else {"torch_dtype": "bfloat16"},
+        model_init_kwargs={"quantization_config": bnb_config, "torch_dtype": "bfloat16", "attn_implementation": "flash_attention_2",} if quantization_bool else {"torch_dtype": "bfloat16", "attn_implementation": "flash_attention_2"},
         # model_init_kwargs={"quantization_config": bnb_config},
 
         # NOTE: Gradient checkpointing should be enabled in the future
@@ -124,13 +127,9 @@ def train_with_dpo(dataset: Dataset,
     # grpo_trainer.model.quantization_config = bnb_config
 
     dpo_trainer.model = dpo_trainer.model.to(accelerator.device)
-
-    if checkpointing_bool:
-        accelerator.print("Resuming from checkpointing directory (if there is one):", checkpoint_dir)
-        dpo_trainer.train(resume_from_checkpoint = checkpoint_dir)
-    else:
-        accelerator.print("Training from scratch")
-        dpo_trainer.train()
+    last = get_last_checkpoint(checkpoint_dir) if os.path.isdir(checkpoint_dir) else None
+    accelerator.print(f"Resuming from {last}" if last else "Training from scratch")
+    dpo_trainer.train(resume_from_checkpoint=last)
         
     accelerator.wait_for_everyone()
     
