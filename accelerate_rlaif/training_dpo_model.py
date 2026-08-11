@@ -78,6 +78,7 @@ def train_with_dpo(dataset: Dataset,
     dpo_config = DPOConfig(
         output_dir=checkpoint_dir,
         per_device_train_batch_size=batch_size,
+        deepspeed="ds_z2.json",
         # gradient_accumulation_steps=8,
         gradient_accumulation_steps=4,
         num_train_epochs=1,
@@ -86,7 +87,9 @@ def train_with_dpo(dataset: Dataset,
         max_length = 512,        
         logging_steps = logging_steps,
         # The optimizer is quantized for 8-bit training
-        optim="adamw_8bit",
+        optim="adamw_bnb_8bit",
+        precompute_ref_log_probs=True,
+        gradient_checkpointing_kwargs={"use_reentrant": False},
         # BROKEN BUT FIX! RuntimeError: expected scalar type Float but found Half
         # model_init_kwargs={"torch_dtype": "bfloat16"},
         model_init_kwargs={"quantization_config": bnb_config, "torch_dtype": "bfloat16"} if quantization_bool else {"torch_dtype": "bfloat16"},
