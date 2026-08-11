@@ -12,7 +12,7 @@ import torch
 from torch.utils.data import Dataset, DataLoader
 
 from helpers.model_funcs import get_completions
-from helpers.ai_judge import generate_responses_and_judgments, judgments_only
+from helpers.ai_judge import generate_responses_and_judgments
 
 CASE_REGIME = "constitution"
 
@@ -63,7 +63,7 @@ if __name__ == "__main__":
     baseline_model_path_or_name = config["base_model"]
     judge_model_path_or_name = config["base_model"]
     constitution_path = config["constitution_path"]
-    dataset_path = config["sft_dataset_test_file"]
+    dataset_path = config["base_dataset_test_file"]
     batch_size=config["inference_batch_size"]
     accelerator = Accelerator()
     

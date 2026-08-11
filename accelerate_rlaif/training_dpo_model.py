@@ -122,7 +122,9 @@ def train_with_dpo(dataset: Dataset,
     )
     
     # grpo_trainer.model.quantization_config = bnb_config
-    
+
+    dpo_trainer.model = dpo_trainer.model.to(accelerator.device)
+
     if checkpointing_bool:
         accelerator.print("Resuming from checkpointing directory (if there is one):", checkpoint_dir)
         dpo_trainer.train(resume_from_checkpoint = checkpoint_dir)

@@ -20,15 +20,15 @@ CONFIG="config.json"
 
 #echo "------------------------------------"
 #echo "doing RLAIF with DPO"
-python3 accelerate_rlaif/generate_dpo_dataset.py $CONFIG train
-python3 accelerate_rlaif/generate_dpo_dataset.py $CONFIG test
-accelerate launch --num_processes 4 --use_deepspeed \
-  --deepspeed_config_file ds_z2.json \
-  accelerate_rlaif/training_dpo_model.py $CONFIG
+#python3 accelerate_rlaif/generate_dpo_dataset.py $CONFIG train
+#python3 accelerate_rlaif/generate_dpo_dataset.py $CONFIG test
+#accelerate launch --num_processes 4 --use_deepspeed \
+#  --deepspeed_config_file ds_z2.json \
+#  accelerate_rlaif/training_dpo_model.py $CONFIG
 
 #echo "------------------------------------"
 #echo "testing with win rate (log prob) against baseline"
-#accelerate launch --multi_gpu --num_processes $NUM_GPUS accelerate_rlaif/win_rate_vs_baseline.py $CONFIG dpo
+accelerate launch --multi_gpu --num_processes $NUM_GPUS accelerate_rlaif/win_rate_vs_baseline.py $CONFIG dpo 1
 
 #accelerate launch -m lm_eval --model hf \
 #    --model_args pretrained=models/sft_model,tokenizer=Qwen/Qwen3-0.6B \

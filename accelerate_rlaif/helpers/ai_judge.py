@@ -276,9 +276,20 @@ def generate_responses_and_judgments(response_model1, response_model2, judge_mod
                 "judgments": judgments
             }
     else:
+        judgments = []
         for i in range(len(judgment_cases)):
             prompt = judgment_cases.get_raw(i)
-            query_bedrock
+            judgment = query_bedrock(prompt)[0]
+            if judgment[0] != "A" and judgment[0] != "B":
+                print("bad judgment: ", judgment)
+            judgments.append(judgment[0] == "A")
+        return {
+            "response1s": response_1s,
+            "response2s": response_2s,
+            "judgments": judgments
+        }
+
+
 
 
 # --------------- REWARD JUDGE ----------------------
