@@ -20,11 +20,11 @@ CONFIG="config.json"
 
 #echo "------------------------------------"
 #echo "doing RLAIF with DPO"
-python3 accelerate_rlaif/generate_dpo_dataset.py $CONFIG train
-python3 accelerate_rlaif/generate_dpo_dataset.py $CONFIG test
-accelerate launch --num_processes 4 --use_deepspeed \
-  --deepspeed_config_file ds_z2.json \
-  accelerate_rlaif/training_dpo_model.py $CONFIG
+#python3 accelerate_rlaif/generate_dpo_dataset.py $CONFIG train
+#python3 accelerate_rlaif/generate_dpo_dataset.py $CONFIG test
+#accelerate launch --num_processes $NUM_GPUS --use_deepspeed \
+#  --deepspeed_config_file ds_z2.json \
+#  accelerate_rlaif/training_dpo_model.py $CONFIG
 
 echo "------------------------------------"
 echo "testing with win rate (log prob) against baseline"

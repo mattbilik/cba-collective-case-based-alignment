@@ -1,7 +1,7 @@
 import torch
 import sys
 from peft import LoraConfig, TaskType
-from transformers import AutoModelForSequenceClassification, AutoTokenizer, PretrainedConfig, BitsAndBytesConfig
+from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer, PretrainedConfig, BitsAndBytesConfig
 from transformers.trainer_utils import get_last_checkpoint
 from trl import DPOTrainer, DPOConfig
 from generate_dpo_dataset import DPODataset
@@ -68,6 +68,12 @@ def train_with_dpo(dataset: Dataset,
     final_model_path = os.path.abspath(output_model_path)
     print("Final model will be saved to:", final_model_path)
     
+    ref_model = AutoModelForCausalLM.from_pretrained(
+        input_model_path_or_name,
+        torch_dtype=torch.bfloat16,
+    )
+
+
     peft_config = LoraConfig(
         task_type=TaskType.CAUSAL_LM,
         inference_mode=False,
@@ -91,11 +97,10 @@ def train_with_dpo(dataset: Dataset,
         logging_steps = logging_steps,
         # The optimizer is quantized for 8-bit training
         optim="adamw_bnb_8bit",
-        precompute_ref_log_probs=True,
         gradient_checkpointing_kwargs={"use_reentrant": False},
         # BROKEN BUT FIX! RuntimeError: expected scalar type Float but found Half
         # model_init_kwargs={"torch_dtype": "bfloat16"},
-        model_init_kwargs={"quantization_config": bnb_config, "torch_dtype": "bfloat16", "attn_implementation": "flash_attention_2",} if quantization_bool else {"torch_dtype": "bfloat16", "attn_implementation": "flash_attention_2"},
+        model_init_kwargs={"quantization_config": bnb_config, "torch_dtype": "bfloat16"} if quantization_bool else {"torch_dtype": "bfloat16"},
         # model_init_kwargs={"quantization_config": bnb_config},
 
         # NOTE: Gradient checkpointing should be enabled in the future
@@ -118,6 +123,7 @@ def train_with_dpo(dataset: Dataset,
 
     dpo_trainer = DPOTrainer(
         model=input_model_path_or_name,
+        ref_model = ref_model,
         args=dpo_config,
         train_dataset=hf_dataset,
         peft_config=peft_config if quantization_bool else None,
@@ -142,16 +148,11 @@ def train_with_dpo(dataset: Dataset,
         
         with open(log_path, "w") as log_file:
             json.dump(dpo_log, log_file, indent=4)
-                
-    final_model = accelerator.unwrap_model(dpo_trainer.model)
- #   final_model = final_model.merge_and_unload()
-    
-    if accelerator.is_local_main_process: 
-        # Save the final reward model
-        print("Saving final model to:", output_model_path)
+ 
+    dpo_trainer.save_model(output_model_path)      # ALL ranks — collective
 
-        final_model.save_pretrained(output_model_path)
-        dpo_trainer.tokenizer.save_pretrained(output_model_path)
+    if accelerator.is_main_process:
+        dpo_trainer.processing_class.save_pretrained(output_model_path)
 
 if __name__ == '__main__':
 

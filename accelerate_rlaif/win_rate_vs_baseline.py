@@ -10,7 +10,7 @@ from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
 from sentence_transformers import SentenceTransformer
 import torch
 from torch.utils.data import Dataset, DataLoader
-
+import numpy as np
 from helpers.model_funcs import get_completions
 from helpers.ai_judge import generate_responses_and_judgments
 
@@ -69,6 +69,7 @@ if __name__ == "__main__":
     
     dataset = CAIBasePairDataset([])
     dataset.load(dataset_path)
+    dataset = dataset
     judge_model = None
     with open(constitution_path) as f:
         constitution = json.load(f)
@@ -110,7 +111,7 @@ if __name__ == "__main__":
     judgments["judgments"] = np.array(judgments["judgments"])
     if accelerator.is_main_process:
         #shooould be win rate?
-        win_rate = (judgments["judgments"] > 0.5).sum() / judgments["judgments"].shape[0])
+        win_rate = (judgments["judgments"] > 0.5).sum() / judgments["judgments"].shape[0]
         print("WIN RATE: ", win_rate)
         with open(config["metrics_file"], "w+") as f:
             f.write("WIN RATE: {}".format(win_rate))

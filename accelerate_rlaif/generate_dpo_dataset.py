@@ -40,8 +40,8 @@ if __name__ == '__main__':
 
     sft_dataset = SFTDataset([],[],[])
     sft_dataset.load(sft_dataset_path)
-    prompts = [elem["prompt"] for elem in sft_dataset[:10]]
-    chosen = [elem["completion"] for elem in sft_dataset[:10]]
-    rejected = [elem["initial"] for elem in sft_dataset[:10]]
+    prompts = [elem["prompt"] for elem in sft_dataset]
+    chosen = [elem["completion"] for elem in sft_dataset]
+    rejected = [elem["initial"] for elem in sft_dataset]
     dpo_dataset = DPODataset(prompts, chosen, rejected)
     dpo_dataset.dump(output_dataset_path)

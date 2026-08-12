@@ -1,15 +1,15 @@
 {
   "bf16": { "enabled": true },
   "zero_optimization": {
-    "stage": 2,
-    "contiguous_gradients": true,
+    "stage": 3,
     "overlap_comm": true,
-    "reduce_scatter": true,
-    "reduce_bucket_size": 2e8,
-    "allgather_bucket_size": 2e8
+    "contiguous_gradients": true,
+    "stage3_prefetch_bucket_size": 5e7,
+    "stage3_param_persistence_threshold": 1e5,
+    "stage3_max_live_parameters": 1e9,
+    "stage3_gather_16bit_weights_on_model_save": true
   },
   "gradient_accumulation_steps": "auto",
   "train_micro_batch_size_per_gpu": "auto",
-  "gradient_clipping": "auto",
-  "steps_per_print": 50
+  "gradient_clipping": "auto"
 }
