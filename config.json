@@ -23,5 +23,5 @@
     "metrics_file": "/data/results/metrics.txt",
     "s3": "case-based-alignment",
     "checkpointing_bool": 1,
-    "quantization_bool": 0
+    "quantization_bool": 1
 }

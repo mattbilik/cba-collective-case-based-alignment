@@ -8,6 +8,7 @@ from generate_dpo_dataset import DPODataset
 from datasets import Dataset
 # import matplotlib.pyplot as plt
 import torch.distributed as dist
+from peft import PeftModel
 
 import os
 
@@ -68,28 +69,27 @@ def train_with_dpo(dataset: Dataset,
     final_model_path = os.path.abspath(output_model_path)
     print("Final model will be saved to:", final_model_path)
     
-    ref_model = AutoModelForCausalLM.from_pretrained(
-        input_model_path_or_name,
-        torch_dtype=torch.bfloat16,
-    )
-
-
     peft_config = LoraConfig(
         task_type=TaskType.CAUSAL_LM,
-        inference_mode=False,
-        r=8,
-        lora_alpha=32,
-        lora_dropout=0.1,
+        r=32,
+        lora_alpha=64,
+        lora_dropout=0.05,
+        target_modules=["q_proj", "k_proj", "v_proj", "o_proj",
+                        "gate_proj", "up_proj", "down_proj"],
     )
-
+    if quantization_bool:
+        learning_rate=5e-6
+    else:
+        learning_rate=5e-7
     dpo_config = DPOConfig(
         output_dir=checkpoint_dir,
         per_device_train_batch_size=batch_size,
-        deepspeed="ds_z2.json",
+        deepspeed=None,
         # gradient_accumulation_steps=8,
         gradient_accumulation_steps=4,
         num_train_epochs=1,
         bf16=True,
+        learning_rate=learning_rate,
         save_strategy="steps",
         save_steps=50,
         save_total_limit=1,
@@ -123,7 +123,6 @@ def train_with_dpo(dataset: Dataset,
 
     dpo_trainer = DPOTrainer(
         model=input_model_path_or_name,
-        ref_model = ref_model,
         args=dpo_config,
         train_dataset=hf_dataset,
         peft_config=peft_config if quantization_bool else None,
@@ -150,9 +149,21 @@ def train_with_dpo(dataset: Dataset,
             json.dump(dpo_log, log_file, indent=4)
  
     dpo_trainer.save_model(output_model_path)      # ALL ranks — collective
+    accelerator.wait_for_everyone()
+    if not quantization_bool:
+        if accelerator.is_main_process:
+            dpo_trainer.processing_class.save_pretrained(output_model_path)
+    else:
 
-    if accelerator.is_main_process:
-        dpo_trainer.processing_class.save_pretrained(output_model_path)
+        if accelerator.is_main_process:
+            merged_path = output_model_path + "_merged"
+
+            base = AutoModelForCausalLM.from_pretrained(
+                input_model_path_or_name, torch_dtype=torch.bfloat16
+            )
+            merged = PeftModel.from_pretrained(base, output_model_path).merge_and_unload()
+            merged.save_pretrained(merged_path, safe_serialization=True)
+            dpo_trainer.processing_class.save_pretrained(merged_path)        
 
 if __name__ == '__main__':
 
@@ -176,7 +187,7 @@ if __name__ == '__main__':
     output_model_path = config["dpo_model_path"]
     # batch_size = config["training_batch_size"]
     # Smaller batch size for DPO    
-    batch_size = 1
+    batch_size = 2
     
     quantization_bool = config["quantization_bool"]
 
